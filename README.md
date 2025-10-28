@@ -15,7 +15,6 @@ release_bundle/
    ├─ ai_image_intent_namer_gui.py       旧版 GUI（可选）
    └─ md_image_localizer.py              可选：Markdown 图片本地化脚本
 ```
-> 配置文件 `ai_image_intent_namer_gui.profiles.json` 不会随包分发，首次运行 GUI 时请手动填写 API / 模型配置并另存为配置档。
 
 ## 运行环境
 - Python 3.9 及以上
