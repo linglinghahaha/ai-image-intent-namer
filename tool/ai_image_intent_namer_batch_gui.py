@@ -572,7 +572,7 @@ class BatchApp(tk.Tk):
         # 第二行：策略和模板
         ttk.Label(ai, text="策略:").grid(row=2, column=0, sticky="w", padx=(8, 4))
         self.strategy_var = tk.StringVar(value="above")
-        ttk.Combobox(ai, textvariable=self.strategy_var, values=["seq", "above", "below", "between", "intent", "hybrid"], width=12, state="readonly").grid(row=2, column=1, sticky="we", padx=(0, 6))
+        ttk.Combobox(ai, textvariable=self.strategy_var, values=["seq", "above", "below", "between", "intent", "hybrid", "sci"], width=12, state="readonly").grid(row=2, column=1, sticky="we", padx=(0, 6))
 
         ttk.Label(ai, text="命名模板:").grid(row=2, column=2, sticky="w", padx=(8, 4))
         self.template_var = tk.StringVar(value=DEFAULT_NAME_TEMPLATE)
@@ -1993,14 +1993,13 @@ class BatchApp(tk.Tk):
         context_frame = ttk.LabelFrame(right_frame, text="上下文")
         context_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
 
-        # 上下文工具条（翻译 / 归纳）
-        tools_row = ttk.Frame(context_frame)
-        tools_row.pack(fill=tk.X, padx=6, pady=(6, 0))
-        ttk.Label(tools_row, text="操作：", foreground="#555").pack(side=tk.LEFT, padx=(0, 6))
-
-        def _open_text_proc_dialog(kind: str) -> None:
+        def _open_text_proc_dialog(kind: str, source_label: str, source_text: str) -> None:
+            text_body = (source_text or "").strip()
+            if not text_body:
+                messagebox.showinfo("提示", f"{source_label}暂无可处理的内容。", parent=dlg)
+                return
             dlg2 = tk.Toplevel(self)
-            dlg2.title("翻译结果" if kind == "translate" else "归纳结果")
+            dlg2.title(("翻译" if kind == "translate" else "归纳") + f" - {source_label}")
             dlg2.geometry("720x520")
             dlg2.transient(self)
             dlg2.grab_set()
@@ -2009,15 +2008,6 @@ class BatchApp(tk.Tk):
             out_box.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
             out_box.insert("1.0", "⏳ 正在处理，请稍候...")
             out_box.configure(state=tk.DISABLED)
-
-            above = (item.above_text or "").strip()
-            below = (item.below_text or "").strip()
-            parts: List[str] = []
-            if above:
-                parts.append(f"【上文】\n{above}")
-            if below:
-                parts.append(f"【下文】\n{below}")
-            user_text = "\n\n".join(parts) if parts else "（无上下文内容）"
 
             def worker() -> None:
                 try:
@@ -2032,6 +2022,10 @@ class BatchApp(tk.Tk):
                         model = (self.sum_model_var.get().strip() or self.model_var.get().strip())
                         sys_prompt = self.sum_prompt_var.get().strip()
 
+                    if not base or not key or not model:
+                        raise ValueError("缺少 Base URL / API Key / Model")
+
+                    user_text = f"{source_label}：\n{text_body}"
                     result = self._run_simple_chat(base, key, model, sys_prompt, user_text)
                     if not isinstance(result, str):
                         result = str(result)
@@ -2053,9 +2047,6 @@ class BatchApp(tk.Tk):
 
             threading.Thread(target=worker, daemon=True).start()
 
-        ttk.Button(tools_row, text="翻译", command=lambda: _open_text_proc_dialog("translate")).pack(side=tk.LEFT, padx=4)
-        ttk.Button(tools_row, text="归纳", command=lambda: _open_text_proc_dialog("summarize")).pack(side=tk.LEFT, padx=4)
-
         contexts = [
             ("上文", item.above_text),
             ("下文", item.below_text),
@@ -2065,16 +2056,40 @@ class BatchApp(tk.Tk):
             sub = ttk.LabelFrame(context_frame, text=title)
             sub.pack(fill=tk.BOTH, expand=True, padx=3, pady=3)
             sub.columnconfigure(0, weight=1)
-            sub.rowconfigure(0, weight=1)
+            sub.rowconfigure(1, weight=1)
+
+            header = ttk.Frame(sub)
+            header.grid(row=0, column=0, sticky="ew", padx=2, pady=(2, 0))
+            header.columnconfigure(0, weight=1)
+
             text_content = (content or "").strip()
             char_count = len(text_content)
+            info_text = f"字数：{char_count}" if char_count else "暂无内容"
+            ttk.Label(header, text=info_text, foreground="#666").grid(row=0, column=0, sticky="w")
+
+            btn_bar = ttk.Frame(header)
+            btn_bar.grid(row=0, column=1, sticky="e")
+            btn_state = tk.NORMAL if char_count else tk.DISABLED
+            ttk.Button(
+                btn_bar,
+                text="翻译",
+                state=btn_state,
+                command=lambda c=content, t=title: _open_text_proc_dialog("translate", t, c or ""),
+            ).pack(side=tk.LEFT, padx=(0, 4))
+            ttk.Button(
+                btn_bar,
+                text="归纳",
+                state=btn_state,
+                command=lambda c=content, t=title: _open_text_proc_dialog("summarize", t, c or ""),
+            ).pack(side=tk.LEFT)
+
             if char_count == 0:
                 height = CONTEXT_EMPTY_LINES
             else:
                 est_lines = (char_count + CONTEXT_CHAR_PER_LINE - 1) // CONTEXT_CHAR_PER_LINE
                 height = max(CONTEXT_MIN_LINES, min(CONTEXT_MAX_LINES, est_lines + 1))
             viewer = scrolledtext.ScrolledText(sub, height=height, wrap=tk.WORD, font=CONTEXT_FONT)
-            viewer.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+            viewer.grid(row=1, column=0, sticky="nsew", padx=2, pady=(2, 2))
             self._render_markdown(viewer, content or "")
 
         # 候选框架
@@ -2086,8 +2101,12 @@ class BatchApp(tk.Tk):
         selected_var = tk.StringVar(value=item.intent_var.get())
         custom_var = tk.StringVar(value=item.intent_var.get())
         status_var = tk.StringVar(value="")
+        custom_entry: Optional[ttk.Entry] = None
+        rewrite_btn: Optional[ttk.Button] = None
+        rewrite_in_progress = False
 
         def render_candidates(candidates: List[Dict], preferred: Optional[str] = None) -> None:
+            nonlocal custom_entry, rewrite_btn
             for child in cand_container.winfo_children():
                 child.destroy()
             sanitized: List[str] = []
@@ -2118,18 +2137,92 @@ class BatchApp(tk.Tk):
                 if reason:
                     ttk.Label(cand_container, text=f"依据：{reason}", wraplength=580, foreground="#666").pack(anchor="w", padx=24, pady=(0, 4))
             ttk.Radiobutton(cand_container, text="自定义：", value="__custom__", variable=selected_var).pack(anchor="w", pady=(6, 2))
-            entry = ttk.Entry(cand_container, textvariable=custom_var, width=60)
-            entry.pack(anchor="w", padx=24, pady=(0, 6))
-            entry.bind("<FocusIn>", lambda _evt: selected_var.set("__custom__"))
+            custom_row = ttk.Frame(cand_container)
+            custom_row.pack(anchor="w", fill=tk.X, padx=24, pady=(0, 6))
+            custom_entry = ttk.Entry(custom_row, textvariable=custom_var, width=52)
+            custom_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            custom_entry.bind("<FocusIn>", lambda _evt: selected_var.set("__custom__"))
+            rewrite_btn = ttk.Button(custom_row, text="生成")
+            rewrite_btn.pack(side=tk.LEFT, padx=(6, 0))
+            rewrite_btn.configure(command=lambda: rewrite_custom_intent())
             if preferred and preferred in sanitized:
                 selected_var.set(preferred)
             elif sanitized:
                 selected_var.set(sanitized[0])
             else:
                 selected_var.set("__custom__")
-                entry.focus_set()
+                custom_entry.focus_set()
+
+        def rewrite_custom_intent() -> None:
+            nonlocal rewrite_in_progress
+            if rewrite_in_progress:
+                return
+            raw_text = (custom_var.get() or "").strip()
+            if not raw_text:
+                messagebox.showinfo("提示", "请先输入或选择图意文本，再尝试生成。", parent=dlg)
+                return
+            base = (self.sum_base_url_var.get().strip() or self.base_url_var.get().strip())
+            key = (self.sum_api_key_var.get().strip() or self.api_key_var.get().strip())
+            model = (self.sum_model_var.get().strip() or self.model_var.get().strip())
+            if not base or not key or not model:
+                messagebox.showerror("错误", "请先填写归纳 Base URL / API Key / Model。", parent=dlg)
+                return
+            sys_prompt = self.sum_prompt_var.get().strip()
+            user_text = (
+                "将以下内容改写为图意命名短语，要求：\n"
+                "1. 使用下划线连接的短语（示例：fig2B_细胞增殖_热图）。\n"
+                "2. 若主要为中文，总长度不超过13个汉字；若主要为英文，不超过8个单词。\n"
+                "3. 删除多余标点、编号及冗余描述，仅保留关键信息。\n"
+                "4. 输出仅包含改写后的短语，不要额外解释。\n"
+                f"原始文本：{raw_text}"
+            )
+
+            def before_run() -> None:
+                nonlocal rewrite_in_progress
+                rewrite_in_progress = True
+                status_var.set("⏳ 正在根据自定义内容生成...")
+                if rewrite_btn:
+                    rewrite_btn.config(state=tk.DISABLED)
+
+            def after_run(success: bool, payload: str) -> None:
+                nonlocal rewrite_in_progress
+                rewrite_in_progress = False
+                if rewrite_btn:
+                    rewrite_btn.config(state=tk.NORMAL)
+                if success:
+                    candidate = sanitize_filename((payload or "").strip())
+                    if candidate:
+                        custom_var.set(candidate)
+                        selected_var.set("__custom__")
+                        status_var.set("✅ 已生成推荐图意。")
+                        if custom_entry:
+                            custom_entry.focus_set()
+                            custom_entry.selection_range(0, tk.END)
+                    else:
+                        status_var.set("⚠️ 模型未返回有效内容。")
+                else:
+                    status_var.set(f"⚠️ 生成失败：{payload}")
+
+            def worker() -> None:
+                try:
+                    result = self._run_simple_chat(
+                        normalize_base_url(base),
+                        key,
+                        model,
+                        sys_prompt,
+                        user_text,
+                    )
+                    if not isinstance(result, str):
+                        result = str(result)
+                    self.after(0, lambda: after_run(True, result))
+                except Exception as exc:
+                    self.after(0, lambda: after_run(False, str(exc)))
+
+            before_run()
+            threading.Thread(target=worker, daemon=True).start()
 
         preferred_strategy = (self.strategy_var.get().strip() or "above").lower()
+        preview_strategy = "below" if preferred_strategy == "sci" else preferred_strategy
         ordered_candidates: List[Dict] = []
         preferred_title: Optional[str] = None
         if isinstance(candidates_data, list):
@@ -2147,8 +2240,8 @@ class BatchApp(tk.Tk):
             for cand in candidates_data:
                 if cand not in ordered_candidates and isinstance(cand, dict):
                     ordered_candidates.append(cand)
-            if preferred_strategy in strategy_pick:
-                preferred_title = sanitize_filename(strategy_pick[preferred_strategy].get("title") or "")
+            if preview_strategy in strategy_pick:
+                preferred_title = sanitize_filename(strategy_pick[preview_strategy].get("title") or "")
         else:
             ordered_candidates = []
         if not ordered_candidates:
