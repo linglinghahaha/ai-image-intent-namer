@@ -643,7 +643,7 @@ SCI_FIG_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 SCI_PANEL_MARK_RE = re.compile(r"[\(\[]\s*([A-Z])\s*[\)\]]")
-SCI_PANEL_INLINE_RE = re.compile(r"(?:^|[;,\.\s])([A-H])[\.:]\s*", re.IGNORECASE)
+SCI_PANEL_INLINE_RE = re.compile(r"(?:^|[;,\.\s])([A-H])(?:[\.:]\s*|,\s+)", re.IGNORECASE)
 
 
 def _normalize_fig_identifier(prefix: Optional[str], number: str) -> Optional[str]:
@@ -1608,6 +1608,7 @@ def build_attachment_plan(
     seq_width: int,
     max_len: int,
     skip_indexes: Optional[Set[int]] = None,
+    intent_language: str = DEFAULT_INTENT_LANGUAGE,
 ) -> Dict:
     skip_indexes = set(skip_indexes or set())
     attach_dir.mkdir(parents=True, exist_ok=True)
@@ -1658,7 +1659,7 @@ def build_attachment_plan(
         index = i + 1
         if index in skip_indexes:
             continue
-        chosen = sanitize_intent_for_language(chosen_map.get(index) or "图意", cfg.intent_language)
+        chosen = sanitize_intent_for_language(chosen_map.get(index) or "图意", intent_language)
         final_base = name_with_template(
             name_template,
             title,
@@ -1667,7 +1668,7 @@ def build_attachment_plan(
             chosen,
             seq_width,
             max_len,
-            intent_language=cfg.intent_language,
+            intent_language=intent_language,
             global_index=index,
         )
 
@@ -2272,6 +2273,8 @@ def process_document(md_path: Path, cfg: Config) -> Dict:
     cursor = 0
 
     chunk_size = max(1, getattr(cfg, "chunk_size", 5))
+    if cfg.strategy == "sci":
+        chunk_size = max(1, total_images)
     pending: List[Dict] = []
     cancelled = False
     attach_dir = md_path.parent / (cfg.attach_dir_name or "attachment")
@@ -2279,6 +2282,42 @@ def process_document(md_path: Path, cfg: Config) -> Dict:
     mapping_changed = False
     if cfg.mode in ("apply", "interactive"):
         mapping = load_image_mapping(attach_dir)
+
+    def _propagate_sci_within_block(contexts: List[Dict], block_index: int) -> None:
+        block_contexts = [ctx for ctx in contexts if ctx.get("block_index") == block_index]
+        if len(block_contexts) <= 1:
+            return
+        anchor_meta: Optional[Dict[str, object]] = None
+        for ctx in reversed(block_contexts):
+            meta = ctx.get("sci_meta") or {}
+            seq = meta.get("panel_sequence")
+            if seq and isinstance(seq, list) and len(seq) > 1:
+                anchor_meta = meta  # type: ignore[assignment]
+                break
+        if not anchor_meta:
+            return
+        figure = anchor_meta.get("figure") or anchor_meta.get("fallback_block")
+        seq_list = anchor_meta.get("panel_sequence") or []
+        segments = anchor_meta.get("panel_segments") or {}
+        if not isinstance(seq_list, list):
+            return
+        for idx, ctx in enumerate(block_contexts):
+            meta = ctx.get("sci_meta") or {}
+            if figure and not meta.get("figure"):
+                meta["figure"] = figure
+            if idx < len(seq_list):
+                panel_letter = seq_list[idx]
+                if panel_letter and not meta.get("panel"):
+                    meta["panel"] = panel_letter
+                if (
+                    isinstance(panel_letter, str)
+                    and isinstance(segments, dict)
+                    and panel_letter in segments
+                ):
+                    meta.setdefault("panel_segments", {})
+                    if isinstance(meta["panel_segments"], dict):
+                        meta["panel_segments"].setdefault(panel_letter, segments[panel_letter])
+            ctx["sci_meta"] = meta
 
     def emit_llm_event(event: Dict) -> None:
         if cfg.llm_event_cb:
@@ -2684,6 +2723,8 @@ def process_document(md_path: Path, cfg: Config) -> Dict:
             "sci_override": override_side,
         }
         pending.append(context)
+        if cfg.strategy == "sci":
+            _propagate_sci_within_block(pending, block_idx)
 
         should_flush = len(pending) == chunk_size or i == total_images - 1
         if should_flush:
@@ -2701,7 +2742,8 @@ def process_document(md_path: Path, cfg: Config) -> Dict:
             if len(batch_contexts) == 1:
                 ai_map = {batch_contexts[0]["index"]: call_single(batch_contexts[0])}
             else:
-                ai_map = call_batch(batch_contexts)
+                ord_contexts = list(reversed(batch_contexts)) if cfg.strategy == "sci" else batch_contexts
+                ai_map = call_batch(ord_contexts)
             for ctx in batch_contexts:
                 finalize_context(ctx, ai_map.get(ctx["index"]))
             pending.clear()

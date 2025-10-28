@@ -1,6 +1,6 @@
 {
   "123": {
-    "strategy": "above",
+    "strategy": "sci",
     "base_url": "https://api.siliconflow.cn",
     "api_key": "sk-ojjowkhkdebdcrcympydsvtlndcrpiseduvvhwebjyxlgllp",
     "model": "Qwen/Qwen3-VL-30B-A3B-Instruct",

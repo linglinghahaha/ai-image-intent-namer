@@ -632,6 +632,7 @@ class BatchApp(tk.Tk):
         ttk.Button(actions, text="批量预览（串行）", style="Accent.TButton", command=self._on_batch_preview).pack(side=tk.LEFT, padx=6)
         ttk.Button(actions, text="查找/替换", command=self._open_find_replace_dialog).pack(side=tk.LEFT, padx=6)
         ttk.Button(actions, text="待办事项", command=self._open_todo_list).pack(side=tk.LEFT, padx=6)
+        ttk.Button(actions, text="导入图意...", command=self._on_import_intents).pack(side=tk.LEFT, padx=6)
         ttk.Button(actions, text="停止", command=self._on_stop).pack(side=tk.LEFT, padx=6)
         ttk.Button(actions, text="退出", command=self.destroy).pack(side=tk.RIGHT, padx=6)
         ttk.Label(
@@ -1212,6 +1213,70 @@ class BatchApp(tk.Tk):
 
     def _on_stop(self) -> None:
         self.stop_flag = True
+
+    def _on_import_intents(self) -> None:
+        tab = self._current_tab()
+        if not tab or not tab.item_uis:
+            messagebox.showinfo("提示", "请先载入并选择一个包含图片的文档。", parent=self)
+            return
+
+        choice = messagebox.askyesnocancel(
+            "导入图意",
+            "请选择导入方式：\n是：从 TXT 文件加载\n否：从剪贴板读取\n取消：放弃导入",
+            parent=self,
+        )
+        if choice is None:
+            return
+
+        lines: List[str] = []
+        if choice:
+            path = filedialog.askopenfilename(
+                title="选择包含图意的文本文件",
+                filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")],
+            )
+            if not path:
+                return
+            try:
+                text = Path(path).read_text(encoding="utf-8")
+            except Exception as exc:
+                messagebox.showerror("错误", f"读取文件失败：{exc}", parent=self)
+                return
+            lines = text.splitlines()
+        else:
+            try:
+                clipboard_text = self.clipboard_get()
+            except Exception as exc:
+                messagebox.showerror("错误", f"无法从剪贴板读取数据：{exc}", parent=self)
+                return
+            lines = clipboard_text.splitlines()
+
+        if not lines:
+            messagebox.showinfo("提示", "未检测到任何可导入的内容。", parent=self)
+            return
+
+        applied = 0
+        total_items = len(tab.item_uis)
+        for idx, item in enumerate(tab.item_uis):
+            if idx >= len(lines):
+                break
+            raw = lines[idx].strip()
+            if not raw:
+                continue
+            sanitized = sanitize_filename(raw)
+            if not sanitized:
+                continue
+            item.intent_var.set(sanitized)
+            applied += 1
+
+        self._recalc_names(tab)
+
+        extra = len(lines) - total_items
+        note_parts = [f"成功应用 {applied} 条图意。"]
+        if extra > 0:
+            note_parts.append(f"（还有 {extra} 条内容未使用，已忽略。）")
+        if applied == 0:
+            note_parts.append("请检查文本是否与图片数量匹配。")
+        messagebox.showinfo("导入完成", "".join(note_parts), parent=self)
         self._log("⏹️ 已请求停止（将在当前任务结束后生效）。")
 
     def _batch_preview_worker(self) -> None:
@@ -2047,9 +2112,32 @@ class BatchApp(tk.Tk):
 
             threading.Thread(target=worker, daemon=True).start()
 
+        all_items = tab.item_uis
+        below_values = [it.below_text for it in all_items]
+        formatted_below: List[str] = []
+        total_items = len(below_values)
+        for idx, raw in enumerate(below_values):
+            text_val = (raw or "").strip()
+            if text_val:
+                formatted_below.append(text_val)
+                continue
+            j = idx
+            while j < total_items and not (below_values[j] or "").strip():
+                j += 1
+            if j < total_items:
+                prefix = "".join(["(空)"] * (j - idx))
+                formatted_below.append(prefix + (below_values[j] or "").strip())
+            else:
+                prefix = "".join(["(空)"] * (total_items - idx))
+                formatted_below.append(prefix or "(空)")
+
+        current_below_display = (
+            formatted_below[item_pos] if 0 <= item_pos < len(formatted_below) else (item.below_text or "")
+        )
+
         contexts = [
             ("上文", item.above_text),
-            ("下文", item.below_text),
+            ("下文", current_below_display),
         ]
 
         for title, content in contexts:
@@ -2168,12 +2256,17 @@ class BatchApp(tk.Tk):
                 messagebox.showerror("错误", "请先填写归纳 Base URL / API Key / Model。", parent=dlg)
                 return
             sys_prompt = self.sum_prompt_var.get().strip()
+            eng_chars = len(re.findall(r"[A-Za-z]", raw_text))
+            zh_chars = len(re.findall(r"[\u4e00-\u9fff]", raw_text))
+            prefer_english = eng_chars >= zh_chars and eng_chars > 0
+            language_hint = "使用英文" if prefer_english else "使用中文"
+            length_hint = "不超过 8 个英文单词" if prefer_english else "不超过 13 个汉字"
             user_text = (
-                "将以下内容改写为图意命名短语，要求：\n"
-                "1. 使用下划线连接的短语（示例：fig2B_细胞增殖_热图）。\n"
-                "2. 若主要为中文，总长度不超过13个汉字；若主要为英文，不超过8个单词。\n"
-                "3. 删除多余标点、编号及冗余描述，仅保留关键信息。\n"
-                "4. 输出仅包含改写后的短语，不要额外解释。\n"
+                "请根据以下内容生成图意命名短语，要求：\n"
+                "1. 仅输出一个短语，使用下划线连接（示例：fig2B_cell_proliferation_heatmap）。\n"
+                f"2. 与原文语言保持一致，{language_hint}。\n"
+                f"3. {length_hint}，删除多余标点、编号与冗余描述。\n"
+                "4. 仅输出短语本身，不要添加解释或引号。\n"
                 f"原始文本：{raw_text}"
             )
 
@@ -2419,6 +2512,7 @@ class BatchApp(tk.Tk):
                 seq_width,
                 max_len,
                 skip_indexes=skip_set,
+                intent_language=self.intent_language_var.get().strip() or DEFAULT_INTENT_LANGUAGE,
             )
             if plan.get('items'):
                 save_attachment_plan(attach_dir, plan)
