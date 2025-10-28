@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 AI 图片“图意”命名器（单文件、开箱即用，Windows/中文友好）
@@ -76,6 +76,15 @@ except Exception:
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".tiff", ".ico", ".heic", ".tif"}
 
+DEFAULT_INTENT_LANGUAGE = "auto"
+DEFAULT_REASON_LANGUAGE = "zh"
+LANGUAGE_LOCALES = {
+    "auto": None,
+    "zh": "zh-CN",
+    "en": "en-US",
+}
+REASON_LANGUAGE_CHOICES = ("zh", "en")
+
 MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(((?:[^()\\]|\\.|(?:\([^()]*\)))+)\)")
 HTML_IMG_RE = re.compile(r'<img\b[^>]*\bsrc=["\']([^"\']+)["\'][^>]*>', re.IGNORECASE)
 WIKILINK_EMBED_RE = re.compile(r"!\[\[(.*?)\]\]")
@@ -97,14 +106,20 @@ PLAN_FILENAME = ".image_plan.json"
 def sanitize_filename(name: str) -> str:
     if not name:
         return "image"
-    # 保留中文与可打印字符，去非法字符与引号括号
     name = "".join(ch for ch in name if ch.isprintable())
-    name = name.replace("（", "").replace("）", "").replace("(", "").replace(")", "").replace("“", "").replace("”", "").replace("'", "").replace('"', "")
+    for ch in ("（", "）", "(", ")", "“", "”", "'", '"'):
+        name = name.replace(ch, "")
     name = "".join(ch for ch in name if ch not in FORBIDDEN_CHARS)
     name = name.strip(" .")
-    # 压缩空白为单个下划线
     name = WHITESPACE_RE.sub("_", name)
     return name or "image"
+def sanitize_intent_for_language(text: str, intent_language: str = DEFAULT_INTENT_LANGUAGE) -> str:
+    raw = (text or '').strip()
+    lang = (intent_language or DEFAULT_INTENT_LANGUAGE).lower()
+    if lang.startswith('en'):
+        raw = raw.replace('-', ' ')
+        raw = WHITESPACE_RE.sub(' ', raw)
+    return sanitize_filename(raw)
 
 def ensure_unique_path(dest_dir: Path, filename: str) -> Path:
     base = Path(filename).stem
@@ -335,14 +350,14 @@ def extract_doc_title(text: str, md_path: Path) -> str:
             if km:
                 candidate = km.group(1).strip().strip("'\"")
                 if candidate:
-                    return sanitize_filename(candidate)
+                    return sanitize_intent_for_language(candidate)
     for line in text.splitlines():
         l = line.strip()
         if l.startswith("#"):
             ttl = l.lstrip("#").strip()
             if ttl:
-                return sanitize_filename(ttl)
-    return sanitize_filename(md_path.stem)
+                return sanitize_intent_for_language(ttl)
+    return sanitize_intent_for_language(md_path.stem)
 
 # -----------------------------
 # 块级解析（简化 parser）
@@ -784,7 +799,19 @@ def call_openai_chat(base_url: str, api_key: str, model: str, messages: List[Dic
     return None
 
 
-def build_ai_messages(doc_title: str, above: str, below: str, between: str, explicit_refs: List[str], alt: Optional[str], title: Optional[str], vision_src: Optional[str] = None, base_url: Optional[str] = None) -> List[Dict]:
+def build_ai_messages(
+    doc_title: str,
+    above: str,
+    below: str,
+    between: str,
+    explicit_refs: List[str],
+    alt: Optional[str],
+    title: Optional[str],
+    vision_src: Optional[str] = None,
+    base_url: Optional[str] = None,
+    intent_language: str = DEFAULT_INTENT_LANGUAGE,
+    reason_language: str = DEFAULT_REASON_LANGUAGE,
+) -> List[Dict]:
     """
     消息构造（文本与多模态）：
     - OpenAI/兼容（纯文本）：messages[].content 为字符串（JSON 载荷）
@@ -803,12 +830,17 @@ def build_ai_messages(doc_title: str, above: str, below: str, between: str, expl
     }
     """
     sys_prompt = (
-        "你是教材风格的命名助手。严格遵循：只输出一个 JSON 对象，不能包含任何说明性文字、前后缀、代码块围栏`、注释或省略号（.../……）。"
+        "你是教材风格的命名助手。严格遵循：只输出一个 JSON 对象，不得包含任何说明性文字、前后缀、代码块围栏`、注释或省略号（.../……）。"
         "基于提供的上下文与线索，输出严格 JSON（不含多余文本）。"
+        "根据 instructions.title_language 生成 normalized_title，根据 instructions.reason_language 编写 candidates[].reason，确保语义准确、语言一致。"
         "为图片生成不少于三种“图意”候选，字段 candidates[].strategy/title/reason/confidence。"
-        "best 为建议采用策略；normalized_title 为可用作文件名的6-16字中文名词短语，要求：不含标点与引号与编号，突出核心术语或对象关系，统一全角半角，避免动词与修辞。"
-        "请充分利用 context_hints：其中 above.sentences 按 priority 排列（priority=1 为最接近图片上方的句子，数字越大越远），below.sentences 同理（priority=1 为紧挨图片后的句子）。优先参考 priority 值小的条目，如需结合多条可说明理由；若上文仅保留单条，则视为该图片最可能的主要语义。"
+        "best 为建议采用策略；normalized_title 应满足 instructions.term_length_range 限制，突出核心术语或对象关系，避免标点、引号、编号和冗余修饰。"
+        "请充分利用 context_hints：其中 above.sentences 按 priority 排列（priority=1 表示最靠近图片上方的句子，数字越大越远，可结合多条说明理由；若上文仅保留单条，则视为该图片最可能的主要语义）。"
     )
+    if english_mode:
+        sys_prompt += '当 title_language 为 en-US 时，请输出自然的英文短语，单词之间使用空格，避免连字符或多余标点。'
+    if intent_language == "auto":
+        sys_prompt += "当 title_language 为 'match_source' 时，请保持输出与参考文本一致的语言，不要擅自翻译。"
     # 将文本截断到合理长度，避免提示过长
     def clip(s: str, n: int) -> str:
         s = s.strip()
@@ -840,6 +872,18 @@ def build_ai_messages(doc_title: str, above: str, below: str, between: str, expl
 
     above_segments = make_priority_list(above_c, prefer_tail=True)
     below_segments = make_priority_list(below_c, prefer_tail=False)
+    intent_language = (intent_language or DEFAULT_INTENT_LANGUAGE).lower()
+    reason_language = (reason_language or DEFAULT_REASON_LANGUAGE).lower()
+    intent_locale = LANGUAGE_LOCALES.get(intent_language)
+    if intent_locale is None and intent_language != "auto":
+        intent_locale = LANGUAGE_LOCALES.get("zh")
+    reason_locale = LANGUAGE_LOCALES.get(reason_language, LANGUAGE_LOCALES.get('zh'))
+    english_mode = intent_language.startswith("en")
+    term_length_range = [6, 32] if english_mode else [6, 16]
+    if intent_language == "auto":
+        title_language_instr = "match_source"
+    else:
+        title_language_instr = intent_locale or LANGUAGE_LOCALES.get("zh")
 
     user_payload = {
         "document_title": doc_title,
@@ -852,8 +896,9 @@ def build_ai_messages(doc_title: str, above: str, below: str, between: str, expl
         "instructions": {
             "strategies_required": ["above", "below", "intent"],
             "caption_priority": True,
-            "language": "zh-CN",
-            "term_length_range": [6, 16]
+            "title_language": title_language_instr,
+            "reason_language": reason_locale,
+            "term_length_range": term_length_range,
         },
         "context_hints": {
             "above": {
@@ -940,18 +985,42 @@ def summarize_messages(messages: List[Dict]) -> List[Dict]:
 
 
 
-def build_ai_batch_messages(doc_title: str, batch_items: List[Dict], base_url: Optional[str] = None) -> List[Dict]:
+def build_ai_batch_messages(
+    doc_title: str,
+    batch_items: List[Dict],
+    base_url: Optional[str] = None,
+    intent_language: str = DEFAULT_INTENT_LANGUAGE,
+    reason_language: str = DEFAULT_REASON_LANGUAGE,
+) -> List[Dict]:
+    intent_language = (intent_language or DEFAULT_INTENT_LANGUAGE).lower()
+    reason_language = (reason_language or DEFAULT_REASON_LANGUAGE).lower()
+    intent_locale = LANGUAGE_LOCALES.get(intent_language)
+    if intent_locale is None and intent_language != "auto":
+        intent_locale = LANGUAGE_LOCALES.get("zh")
+    reason_locale = LANGUAGE_LOCALES.get(reason_language, LANGUAGE_LOCALES.get("zh"))
+    english_mode = intent_language.startswith("en")
+    term_length_range = [6, 32] if english_mode else [6, 16]
+    if intent_language == "auto":
+        title_language_instr = "match_source"
+    else:
+        title_language_instr = intent_locale or LANGUAGE_LOCALES.get("zh")
+
     """
     构造多张图片批量请求的 messages（仅文本模式）。
     要求模型返回 JSON 对象：{"items": [ {...}, ... ]}
     其中每个元素结构与单张图片时的返回一致，并携带 index 字段。
     """
     sys_prompt = (
-        "你是教材风格的命名助手。严格遵循：只输出一个 JSON 对象 items，不得附加说明文字。"
-        "对每张图片给出 candidates[].strategy/title/reason/confidence，best 为建议采用策略，"
-        "normalized_title 为 6-16 字中文名词短语，强调术语，避免动词与标点。"
-        "输出格式需为 {\"items\":[{...}]}, items 中每项包含 index。"
+        "你是教材风格的命名助手。严格遵循：只输出一个 JSON 对象 items，不得额外添加说明文字。"
+        "为每张图片生成 candidates[].strategy/title/reason/confidence，best 为建议采用策略。"
+        "normalized_title 应使用 instructions.title_language 指定的语言，并满足 instructions.term_length_range 限制。"
+        "candidates[].reason 必须使用 instructions.reason_language 指定的语言，语言风格保持一致。"
+        "返回格式为 {\"items\":[{...}]}，items 中每个元素带有 index。"
     )
+    if english_mode:
+        sys_prompt += '当 title_language 为 en-US 时，请输出自然的英文短语，单词之间使用空格，避免连字符或多余标点。'
+    if intent_language == "auto":
+        sys_prompt += "当 title_language 为 'match_source' 时，请保持输出与原文语言一致。"
     def clip(s: str, n: int) -> str:
         s = s.strip()
         if len(s) <= n:
@@ -979,9 +1048,10 @@ def build_ai_batch_messages(doc_title: str, batch_items: List[Dict], base_url: O
         "instructions": {
             "strategies_required": ["above", "below", "intent"],
             "caption_priority": True,
-            "language": "zh-CN",
-            "term_length_range": [6, 16]
-        }
+            "title_language": title_language_instr,
+            "reason_language": reason_locale,
+            "term_length_range": term_length_range
+        },
     }
     messages = [
         {"role": "system", "content": sys_prompt},
@@ -1074,7 +1144,7 @@ def safe_parse_json(s: Optional[str]) -> Optional[Dict]:
 
     return None
 
-def validate_ai_result(d: Optional[Dict]) -> Optional[Dict]:
+def validate_ai_result(d: Optional[Dict], intent_language: str = DEFAULT_INTENT_LANGUAGE) -> Optional[Dict]:
     """
     接受以下变体：
     - 直接对象：{"candidates":[...], "best":"...", "normalized_title":"..."}
@@ -1094,6 +1164,7 @@ def validate_ai_result(d: Optional[Dict]) -> Optional[Dict]:
     if "candidates" not in d or not isinstance(d["candidates"], list) or len(d["candidates"]) < 1:
         return None
 
+
     for c in d["candidates"]:
         if not isinstance(c, dict):
             return None
@@ -1105,13 +1176,13 @@ def validate_ai_result(d: Optional[Dict]) -> Optional[Dict]:
         except Exception:
             conf = 0.5
         c["confidence"] = max(0.0, min(1.0, conf))
-        c["title"] = sanitize_filename(c["title"])
+        c["title"] = sanitize_intent_for_language(c["title"], intent_language)
 
     best = d.get("best") or d["candidates"][0].get("strategy", "intent")
     d["best"] = str(best)
 
     nt = d.get("normalized_title") or d["candidates"][0].get("title") or "图意"
-    d["normalized_title"] = sanitize_filename(nt)
+    d["normalized_title"] = sanitize_intent_for_language(nt, intent_language)
 
     return d
 
@@ -1127,6 +1198,7 @@ def name_with_template(
     intent_phrase: str,
     seq_width: int,
     max_len: int,
+    intent_language: str = DEFAULT_INTENT_LANGUAGE,
     global_index: Optional[int] = None,
     dup_index: Optional[int] = None,
 ) -> str:
@@ -1163,7 +1235,7 @@ def name_with_template(
     out = tmpl
     for k, v in mapping.items():
         out = out.replace("{" + k + "}", v)
-    out = sanitize_filename(out)
+    out = sanitize_intent_for_language(out, intent_language)
     # 如模板或意图末尾仍出现扩展名，去除以防重复扩展
     out = re.sub(r"(?i)\.(?:png|jpe?g|gif|webp|bmp|svg|tiff?|ico|heic)$", "", out)
     return out[:max_len].rstrip(" ._")
@@ -1202,7 +1274,7 @@ def download_image(url: str, dest_dir: Path, timeout: int) -> Optional[Path]:
         r = requests.get(url, headers=headers, timeout=timeout)
         r.raise_for_status()
         ext = guess_ext_from_url_or_headers(url, r.headers.get("Content-Type"))
-        name = sanitize_filename(Path(url).stem) + ext
+        name = sanitize_intent_for_language(Path(url).stem) + ext
         final = ensure_unique_path(dest_dir, name)
         final.write_bytes(r.content)
         return final
@@ -1371,7 +1443,7 @@ def build_attachment_plan(
         index = i + 1
         if index in skip_indexes:
             continue
-        chosen = sanitize_filename(chosen_map.get(index) or "图意")
+        chosen = sanitize_intent_for_language(chosen_map.get(index) or "图意", cfg.intent_language)
         final_base = name_with_template(
             name_template,
             title,
@@ -1380,6 +1452,7 @@ def build_attachment_plan(
             chosen,
             seq_width,
             max_len,
+            intent_language=cfg.intent_language,
             global_index=index,
         )
 
@@ -1771,6 +1844,8 @@ class Config:
     backup: bool
     vision: bool                      # 是否启用视觉理解（SiliconFlow VLM 格式）
     chunk_size: int                   # 每次聚合提交给模型的图片数量
+    intent_language: str
+    reason_language: str
     progress_cb: Optional[Callable[[str], None]] = None
     batch_confirm_cb: Optional[Callable[[List[Dict]], bool]] = None
     batch_result_cb: Optional[Callable[[Dict], None]] = None
@@ -1851,7 +1926,7 @@ def process_document(md_path: Path, cfg: Config) -> Dict:
     if cfg.verbose:
         print(f"✅ 发现图片 {total_images} 张")
 
-    doc_base = sanitize_filename(title) or "document"
+    doc_base = sanitize_intent_for_language(title, cfg.intent_language) or "document"
     seq_width_doc = max(cfg.seq_width, len(str(max(1, total_images))))
     intent_counters: Dict[str, int] = defaultdict(int)
     last_intent: Optional[str] = None
@@ -1936,7 +2011,9 @@ def process_document(md_path: Path, cfg: Config) -> Dict:
             context.get("alt"),
             context.get("title_attr"),
             vision_src=vision_src,
-            base_url=cfg.base_url or ""
+            base_url=cfg.base_url or "",
+            intent_language=cfg.intent_language,
+            reason_language=cfg.reason_language,
         )
         emit_llm_event(
             {
@@ -1984,7 +2061,7 @@ def process_document(md_path: Path, cfg: Config) -> Dict:
         parsed = safe_parse_json(ai_out)
         if parsed is None:
             return make_ai_result("llm_parse_failed", (ai_out or "")[:400], req_mode)
-        validated = validate_ai_result(parsed)
+        validated = validate_ai_result(parsed, intent_language=cfg.intent_language)
         if validated is None:
             return make_ai_result("llm_validate_failed", (ai_out or "")[:400], req_mode)
         return make_ai_result(None, None, req_mode, validated)
@@ -1997,7 +2074,13 @@ def process_document(md_path: Path, cfg: Config) -> Dict:
         if cfg.vision:
             # 视觉模式暂不支持批量聚合，依次调用单图
             return {ctx["index"]: call_single(ctx) for ctx in contexts}
-        msgs = build_ai_batch_messages(title, contexts, base_url=cfg.base_url or "")
+        msgs = build_ai_batch_messages(
+            title,
+            contexts,
+            base_url=cfg.base_url or "",
+            intent_language=cfg.intent_language,
+            reason_language=cfg.reason_language,
+        )
         is_sf = is_siliconflow(cfg.base_url or "")
         req_mode = "sf_text_batch" if is_sf else "openai_text_batch"
         emit_llm_event(
@@ -2056,7 +2139,7 @@ def process_document(md_path: Path, cfg: Config) -> Dict:
             idx = entry.get("index")
             if idx is None:
                 continue
-            validated = validate_ai_result(entry)
+            validated = validate_ai_result(entry, intent_language=cfg.intent_language)
             if validated is None:
                 snippet = json.dumps(entry, ensure_ascii=False)[:400]
                 if idx in result_map:
@@ -2082,7 +2165,7 @@ def process_document(md_path: Path, cfg: Config) -> Dict:
             context["below_focus"],
             context["between"],
         )
-        normalized_for_item = sanitize_filename(intent_phrase)
+        normalized_for_item = sanitize_intent_for_language(intent_phrase, cfg.intent_language)
         if len(normalized_for_item.strip()) < 3:
             if last_intent:
                 normalized_for_item = last_intent
@@ -2098,8 +2181,9 @@ def process_document(md_path: Path, cfg: Config) -> Dict:
 
         intent_counters[normalized_for_item] += 1
         intent_index = intent_counters[normalized_for_item]
-        suggested_name = sanitize_filename(
-            f"{doc_base}{context['index']:0{seq_width_doc}d}_{normalized_for_item}{intent_index:02d}"
+        suggested_name = sanitize_intent_for_language(
+            f"{doc_base}{context['index']:0{seq_width_doc}d}_{normalized_for_item}{intent_index:02d}",
+            cfg.intent_language,
         ) or f"image_{context['index']:0{seq_width_doc}d}"
 
         candidates: List[Dict] = []
@@ -2403,7 +2487,19 @@ def process_document_pick_one(md_path: Path, cfg: Config, target_index: int) -> 
     if cfg.strategy != "seq":
         # 识图/融合：仅对目标图进行一次调用
         is_sf = is_siliconflow(cfg.base_url or "")
-        msgs = build_ai_messages(title, target_above_eff, target_below_eff, target_between, target_explicit, target_ref.alt, target_ref.title, vision_src=vision_src, base_url=cfg.base_url or "")
+        msgs = build_ai_messages(
+            title,
+            target_above_eff,
+            target_below_eff,
+            target_between,
+            target_explicit,
+            target_ref.alt,
+            target_ref.title,
+            vision_src=vision_src,
+            base_url=cfg.base_url or "",
+            intent_language=cfg.intent_language,
+            reason_language=cfg.reason_language,
+        )
         ai_out = call_openai_chat(
             cfg.base_url or "",
             cfg.api_key or "",
@@ -2416,7 +2512,7 @@ def process_document_pick_one(md_path: Path, cfg: Config, target_index: int) -> 
         )
         if ai_out:
             parsed = safe_parse_json(ai_out)
-            ai_json = validate_ai_result(parsed) if parsed else None
+            ai_json = validate_ai_result(parsed, intent_language=cfg.intent_language) if parsed else None
 
     # 提供三种选择的短语
     above_phrase, _ = pick_intent_phrase("above", ai_json, target_above_eff, target_below_eff, target_between)
@@ -2433,10 +2529,10 @@ def process_document_pick_one(md_path: Path, cfg: Config, target_index: int) -> 
     if sel not in ("1", "2", "3"):
         sel = "3"
     chosen = {"1": above_phrase, "2": below_phrase, "3": vision_phrase}[sel]
-    chosen = sanitize_filename(chosen)
+    chosen = sanitize_intent_for_language(chosen, cfg.intent_language)
 
     # 计算最终文件名并执行改名与回链（仅目标图片）
-    final_name = name_with_template(cfg.name_template, title, target_block, target_img, chosen, cfg.seq_width, cfg.max_name_len)
+    final_name = name_with_template(cfg.name_template, title, target_block, target_img, chosen, cfg.seq_width, cfg.max_name_len, intent_language=cfg.intent_language)
     new_text = text
     attach_dir = md_path.parent / cfg.attach_dir_name
     mapping = load_image_mapping(attach_dir)
@@ -2555,6 +2651,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model", default=getenv_default("OPENAI_MODEL", "gpt-4o-mini"), help="模型名称（可读 OPENAI_MODEL）")
     # 视觉理解（SiliconFlow VLM）
     p.add_argument("--vision", action="store_true", help="启用视觉理解（为 SiliconFlow VLM 构造 image_url 消息内容）")
+    p.add_argument(
+        "--intent-language",
+        choices=list(LANGUAGE_LOCALES.keys()),
+        default=DEFAULT_INTENT_LANGUAGE,
+        help="生成的图意语言（默认跟随原文，可选翻译成中文或输出英文）",
+    )
+    p.add_argument(
+        "--reason-language",
+        choices=REASON_LANGUAGE_CHOICES,
+        default=DEFAULT_REASON_LANGUAGE,
+        help="候选解释语言（默认中文，可选英文）",
+    )
     # 单图选择：指定图片序号（1-based）
     p.add_argument("--index", type=int, default=1, help="单图选择时的图片序号（1-based），与 pick-one 模式配合使用")
     return p
@@ -2614,7 +2722,9 @@ def main() -> None:
         verbose=bool(args.verbose),
         backup=bool(args.backup),
         vision=bool(args.vision),
-        chunk_size=max(1, int(args.chunk_size or 5))
+        chunk_size=max(1, int(args.chunk_size or 5)),
+        intent_language=getattr(args, "intent_language", DEFAULT_INTENT_LANGUAGE),
+        reason_language=getattr(args, "reason_language", DEFAULT_REASON_LANGUAGE),
     )
 
     try:

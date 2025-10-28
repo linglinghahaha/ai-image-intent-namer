@@ -1,409 +1,29 @@
-﻿#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-AI 图片“图意”命名器 - 批量 GUI（串行调度，分标签页独立审核/应用）
-"""
-
-from __future__ import annotations
-
-import json
-import os
-import random
-import re
-import threading
-import time
-import copy
-from dataclasses import dataclass
-from io import BytesIO
-from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
-
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
-
-try:
-    from PIL import Image, ImageTk  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
-    Image = None
-    ImageTk = None
-
-try:
-    import requests  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
-    requests = None
-
-import sys
-
-THIS_FILE = Path(__file__).resolve()
-TOOL_DIR = THIS_FILE.parent
-if str(TOOL_DIR) not in sys.path:
-    sys.path.insert(0, str(TOOL_DIR))
-
-try:
-    import ai_image_intent_namer as core
-    from ai_image_intent_namer import (
-        Config,
-        process_document,
-        read_text,
-        write_text_utf8,
-        extract_doc_title,
-        collect_images,
-        find_neighbor_text,
-        name_with_template,
-        sanitize_filename,
-        ensure_unique_path,
-        is_remote_url,
-        build_ai_messages,
-        call_openai_chat,
-        safe_parse_json,
-        validate_ai_result,
-        normalize_base_url,
-        is_siliconflow,
-        resolve_local_image,
-        get_last_llm_error,
-        collect_images_to_attachment,
-        load_image_mapping,
-        save_image_mapping,
-        ensure_attachment_for_src,
-        update_mapping_target,
-        build_attachment_plan,
-        execute_attachment_plan,
-        load_attachment_plan,
-        save_attachment_plan,
-        plan_file_path,
-        normalize_embedded_html_images,
-        MD_IMAGE_RE,
-        WHITESPACE_RE,
-    )
-except Exception as e:  # pragma: no cover - bootstrap failure
-    print("❌ 无法导入后端模块 ai_image_intent_namer.py，请确认该文件位于同目录")
-    print("错误:", e)
-    sys.exit(1)
-
-try:
-    import md_image_localizer as mil  # type: ignore
-    from md_image_localizer import FileProcessor as MILFileProcessor  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
-    mil = None
-    MILFileProcessor = None
-
-try:  # pragma: no cover - platform specific
-    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
-except Exception:
-    pass
-
-APP_TITLE = "AI 图片“图意”命名器（批量GUI，串行调度）"
-PROFILES_PATH = TOOL_DIR / "ai_image_intent_namer_gui.profiles.json"
-DEFAULT_NAME_TEMPLATE = "{title}_{index:02d}_{intent}"
-DEFAULT_ATTACH_DIR = "attachments"
-PLAN_HISTORY_FILENAME = ".image_plan.history.log"
-
-DEFAULT_UI_LANGUAGE = "zh"
-DEFAULT_INTENT_LANGUAGE = "auto"
-UI_LANGUAGE_ORDER = ("zh", "en")
-INTENT_LANGUAGE_ORDER = ("auto", "zh", "en")
-LANGUAGE_DISPLAY = {
-    "ui": {
-        "zh": {"zh": "中文", "en": "Chinese"},
-        "en": {"zh": "英文", "en": "English"},
-    },
-    "intent": {
-        "auto": {"zh": "跟随原文语言", "en": "Match Source Language"},
-        "zh": {"zh": "翻译成中文", "en": "Translate to Chinese"},
-        "en": {"zh": "输出英文", "en": "Output English"},
-    },
-}
-
-VISION_TEST_ASSETS = [
-    {
-        "name": "红色像素",
-        "description": "纯红色 1x1 PNG",
-        "data_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8AARgAI/wlvrWcAAAAASUVORK5CYII=",
-    },
-    {
-        "name": "绿色像素",
-        "description": "纯绿色 1x1 PNG",
-        "data_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/5+BFgAHggKBr+2qAAAAAElFTkSuQmCC",
-    },
-]
-
-MD_INLINE_RE = re.compile(r"(\*\*|__)(.+?)\1|`([^`]+)`")
-MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-
-CONTEXT_FONT_FAMILY = "Microsoft YaHei"
-CONTEXT_FONT_SIZE = 12
-CONTEXT_FONT = (CONTEXT_FONT_FAMILY, CONTEXT_FONT_SIZE)
-CONTEXT_HEADING_FONT_1 = (CONTEXT_FONT_FAMILY, CONTEXT_FONT_SIZE + 2, "bold")
-CONTEXT_HEADING_FONT_2 = (CONTEXT_FONT_FAMILY, CONTEXT_FONT_SIZE + 1, "bold")
-CONTEXT_HEADING_FONT_3 = (CONTEXT_FONT_FAMILY, CONTEXT_FONT_SIZE, "bold")
-CONTEXT_BOLD_FONT = (CONTEXT_FONT_FAMILY, CONTEXT_FONT_SIZE, "bold")
-CONTEXT_CHAR_PER_LINE = 35
-CONTEXT_MIN_LINES = 3
-CONTEXT_MAX_LINES = 10
-CONTEXT_EMPTY_LINES = 2
-
-
-@dataclass
-class ItemUI:
-    index: int
-    block_index: int
-    image_index: int
-    src: str
-    above_text: str
-    below_text: str
-    between_text: str
-    alt: Optional[str]
-    title_attr: Optional[str]
-    frame: tk.Frame
-    intent_var: tk.StringVar
-    final_var: tk.StringVar
-    apply_one_btn: ttk.Button
-    skip_var: tk.BooleanVar
-    skip_check: ttk.Checkbutton
-    intent_entry: Optional[ttk.Entry] = None
-
-
-@dataclass
-class TabState:
-    md_path: Path
-    title: str
-    results: Dict
-    page: ttk.Frame
-    canvas: tk.Canvas
-    inner_frame: tk.Frame
-    scrollbar: ttk.Scrollbar
-    item_uis: List[ItemUI]
-    btn_refresh: ttk.Button
-    btn_apply_all: ttk.Button
-    btn_close: ttk.Button
-    recalc_job: Optional[str] = None
-    processing: bool = False
-    completed: bool = False
-
-
-class BatchApp(tk.Tk):
-    def __init__(self) -> None:
-        super().__init__()
-        self.ui_language_var = tk.StringVar(value=DEFAULT_UI_LANGUAGE)
-        self.intent_language_var = tk.StringVar(value=DEFAULT_INTENT_LANGUAGE)
-        self._ui_language_display_var = tk.StringVar()
-        self._intent_language_display_var = tk.StringVar()
-        self._ui_lang_value_to_code: Dict[str, str] = {}
-        self._intent_lang_value_to_code: Dict[str, str] = {}
-        self.ui_language_var.trace_add("write", self._on_ui_language_changed)
-        self.intent_language_var.trace_add("write", self._on_intent_language_changed)
-        self._find_replace_window: Optional[tk.Toplevel] = None
-        self._find_replace_state: Dict[str, object] = {}
-        self._init_styles()
-        self.title(APP_TITLE)
-        self.geometry("1100x720")
-        self.minsize(1000, 650)
-
-        self.files: List[Path] = []
-        self.stop_flag = False
-        self.tabs: Dict[str, TabState] = {}
-        self.profiles: Dict[str, Dict] = {}
-
-        self._build_widgets()
-        self._load_profiles()
-
-    def _language_label(self, category: str, code: str, ui_lang: Optional[str] = None) -> str:
-        table = LANGUAGE_DISPLAY.get(category, {})
-        lang = ui_lang or self.ui_language_var.get() or DEFAULT_UI_LANGUAGE
-        entry = table.get(code, {})
-        return entry.get(lang) or entry.get(DEFAULT_UI_LANGUAGE, code)
-
-    def _refresh_language_selectors(self) -> None:
-        ui_lang = (self.ui_language_var.get() or DEFAULT_UI_LANGUAGE).strip() or DEFAULT_UI_LANGUAGE
-        intent_lang = (self.intent_language_var.get() or DEFAULT_INTENT_LANGUAGE).strip() or DEFAULT_INTENT_LANGUAGE
-
-        ui_labels = [self._language_label("ui", code, ui_lang) for code in UI_LANGUAGE_ORDER]
-        self._ui_lang_value_to_code = {label: code for label, code in zip(ui_labels, UI_LANGUAGE_ORDER)}
-        if hasattr(self, "ui_lang_combo"):
-            self.ui_lang_combo.configure(values=ui_labels)
-        self._ui_language_display_var.set(self._language_label("ui", ui_lang, ui_lang))
-
-        intent_labels = [self._language_label("intent", code, ui_lang) for code in INTENT_LANGUAGE_ORDER]
-        self._intent_lang_value_to_code = {label: code for label, code in zip(intent_labels, INTENT_LANGUAGE_ORDER)}
-        if hasattr(self, "intent_lang_combo"):
-            self.intent_lang_combo.configure(values=intent_labels)
-        self._intent_language_display_var.set(self._language_label("intent", intent_lang, ui_lang))
-
-    def _on_ui_language_selected(self, _event: Optional[tk.Event] = None) -> None:
-        code = self._ui_lang_value_to_code.get(self._ui_language_display_var.get())
-        if code and code != self.ui_language_var.get():
-            self.ui_language_var.set(code)
-
-    def _on_intent_language_selected(self, _event: Optional[tk.Event] = None) -> None:
-        code = self._intent_lang_value_to_code.get(self._intent_language_display_var.get())
-        if code and code != self.intent_language_var.get():
-            self.intent_language_var.set(code)
-
-    def _on_ui_language_changed(self, *_args: object) -> None:
+﻿        lang_frame.pack(side=tk.TOP, fill=tk.X, padx=20, pady=(0, 10))
+        ui_lang_label = ttk.Label(lang_frame, text=self.tr('ui_language_label'))
+        ui_lang_label.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(ui_lang_label, 'ui_language_label')
+        self.ui_lang_combo = ttk.Combobox(lang_frame, textvariable=self._ui_language_display_var, state='readonly', width=14)
+        self.ui_lang_combo.pack(side=tk.LEFT, padx=(0, 20))
+        self.ui_lang_combo.bind('<<ComboboxSelected>>', self._on_ui_language_selected)
+        intent_lang_label = ttk.Label(lang_frame, text=self.tr('intent_language_label'))
+        intent_lang_label.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(intent_lang_label, 'intent_language_label')
+        self.intent_lang_combo = ttk.Combobox(lang_frame, textvariable=self._intent_language_display_var, state='readonly', width=14)
+        self.intent_lang_combo.pack(side=tk.LEFT)
+        self.intent_lang_combo.bind('<<ComboboxSelected>>', self._on_intent_language_selected)
         self._refresh_language_selectors()
 
-    def _on_intent_language_changed(self, *_args: object) -> None:
-        self._refresh_language_selectors()
-        self._recalc_all_tabs()
-
-    # ------------------------------------------------------------------ #
-    # UI 构建与日志
-    # ------------------------------------------------------------------ #
-    def _current_tab(self) -> Optional[TabState]:
-        try:
-            current_id = self.nb.select()
-        except Exception:
-            return None
-        for tab in self.tabs.values():
-            if str(tab.page) == current_id:
-                return tab
-        return None
-
-    def _init_styles(self) -> None:
-        style = ttk.Style(self)
-        try:
-            if "clam" in style.theme_names():
-                style.theme_use("clam")
-        except Exception:
-            pass
-        style.configure("Heading.TLabel", font=("Microsoft YaHei", 14, "bold"))
-        style.configure("Subheading.TLabel", foreground="#666666")
-        style.configure("Accent.TButton", padding=(12, 6), foreground="#ffffff", background="#1e88e5")
-        style.map("Accent.TButton", background=[("active", "#1565c0"), ("disabled", "#90caf9")], foreground=[("disabled", "#eeeeee")])
-        style.configure("TLabelFrame", padding=(12, 8))
-        style.configure("TNotebook.Tab", padding=(18, 8))
-
-    def _build_widgets(self) -> None:
-        ttk.Label(self, text="批量处理 · Markdown 图片命名助手", style="Heading.TLabel").pack(side=tk.TOP, anchor="w", padx=20, pady=(16, 4))
-        ttk.Label(self, text="选择多个 Markdown 文件后串行预览，可逐张重命名并写回。", style="Subheading.TLabel").pack(side=tk.TOP, anchor="w", padx=20, pady=(0, 12))
-
-        top_region = ttk.Frame(self)
-        top_region.pack(side=tk.TOP, fill=tk.X, padx=20, pady=(0, 10))
-        top_region.columnconfigure(0, weight=3)
-        top_region.columnconfigure(1, weight=2)
-
-        files_frame = ttk.LabelFrame(top_region, text="批量文件")
-        files_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
-        files_frame.columnconfigure(0, weight=1)
-        files_frame.rowconfigure(0, weight=1)
-
-        list_container = ttk.Frame(files_frame, padding=(4, 0))
-        list_container.grid(row=0, column=0, sticky="nsew")
-        list_container.columnconfigure(0, weight=1)
-        list_container.rowconfigure(0, weight=1)
-
-        self.files_listbox = tk.Listbox(list_container, height=5, selectmode=tk.EXTENDED, relief=tk.FLAT, borderwidth=0)
-        self.files_listbox.grid(row=0, column=0, sticky="nsew")
-        list_scroll = ttk.Scrollbar(list_container, orient="vertical", command=self.files_listbox.yview)
-        self.files_listbox.configure(yscrollcommand=list_scroll.set)
-        list_scroll.grid(row=0, column=1, sticky="ns")
-
-        btns_col = ttk.Frame(files_frame, padding=(0, 4))
-        btns_col.grid(row=0, column=1, sticky="ns", padx=(8, 12), pady=10)
-        ttk.Button(btns_col, text="添加文件...", style="Accent.TButton", command=self._on_add_files).pack(fill=tk.X, pady=(0, 8))
-        ttk.Button(btns_col, text="移除选中", command=self._on_remove_selected).pack(fill=tk.X, pady=4)
-        ttk.Button(btns_col, text="清空列表", command=self._on_clear_list).pack(fill=tk.X, pady=4)
-
-        ai = ttk.LabelFrame(top_region, text="AI 参数与策略")
-        ai.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
-        ai.columnconfigure(1, weight=1)
-        ai.columnconfigure(3, weight=1)
-
-        self.base_url_var = tk.StringVar(value=os.environ.get("OPENAI_BASE_URL", "https://api.siliconflow.cn"))
-        self.api_key_var = tk.StringVar(value=os.environ.get("OPENAI_API_KEY", ""))
-        self.model_var = tk.StringVar(value=os.environ.get("OPENAI_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct"))
-        self.timeout_var = tk.IntVar(value=120)
-        self.retries_var = tk.IntVar(value=3)
-        self.rate_limit_var = tk.DoubleVar(value=0.4)
-        self.batch_size_var = tk.IntVar(value=5)
-
-        # 翻译/归纳 独立API与Prompt（默认回落到主模型配置）
-        self.trans_base_url_var = tk.StringVar(value=os.environ.get("TRANS_BASE_URL", self.base_url_var.get()))
-        self.trans_api_key_var = tk.StringVar(value=os.environ.get("TRANS_API_KEY", self.api_key_var.get()))
-        self.trans_model_var = tk.StringVar(value=os.environ.get("TRANS_MODEL", self.model_var.get()))
-        self.sum_base_url_var = tk.StringVar(value=os.environ.get("SUM_BASE_URL", self.base_url_var.get()))
-        self.sum_api_key_var = tk.StringVar(value=os.environ.get("SUM_API_KEY", self.api_key_var.get()))
-        self.sum_model_var = tk.StringVar(value=os.environ.get("SUM_MODEL", self.model_var.get()))
-        self.trans_prompt_var = tk.StringVar(
-            value="你是专业翻译，请将以下文本翻译为简体中文，保留术语准确，忠实原意，不添加解释。只输出译文。"
-        )
-        self.sum_prompt_var = tk.StringVar(
-            value="你是学术写作助手，请用简洁的中文为以下内容生成摘要，条理清晰，保留关键信息，不超过150字。只输出摘要。"
-        )
-
-        # 第一行：配置档和按钮
-        ttk.Label(ai, text="配置档:").grid(row=0, column=0, sticky="w", padx=(8, 4), pady=6)
-        self.profile_name_var = tk.StringVar()
-        self.profile_combo = ttk.Combobox(ai, textvariable=self.profile_name_var, values=[], width=18)
-        self.profile_combo.grid(row=0, column=1, sticky="we", pady=6, padx=(0, 4))
-
-        ttk.Button(ai, text="载入", command=self._on_profile_load).grid(row=0, column=2, padx=(2, 2), pady=6, sticky="w")
-        ttk.Button(ai, text="测试API", command=self._on_test_api).grid(row=0, column=3, padx=(2, 2), pady=6, sticky="e")
-        ttk.Button(ai, text="测试图片识别", command=self._on_test_vision).grid(row=0, column=4, padx=(2, 2), pady=6, sticky="w")
-        ttk.Button(ai, text="API/模型配置...", style="Accent.TButton", command=self._open_api_config_dialog).grid(row=0, column=5, padx=(2, 6), pady=6, sticky="e")
-
-        self.model_summary_var = tk.StringVar()
-        ttk.Label(ai, textvariable=self.model_summary_var, foreground="#575757").grid(row=1, column=0, columnspan=6, sticky="we", padx=(8, 4), pady=(0, 8))
-
-        # 第二行：策略和模板
-        ttk.Label(ai, text="策略:").grid(row=2, column=0, sticky="w", padx=(8, 4))
-        self.strategy_var = tk.StringVar(value="above")
-        ttk.Combobox(ai, textvariable=self.strategy_var, values=["seq", "above", "below", "between", "intent", "hybrid"], width=12, state="readonly").grid(row=2, column=1, sticky="we", padx=(0, 6))
-
-        ttk.Label(ai, text="命名模板:").grid(row=2, column=2, sticky="w", padx=(8, 4))
-        self.template_var = tk.StringVar(value=DEFAULT_NAME_TEMPLATE)
-        ttk.Entry(ai, textvariable=self.template_var, width=26).grid(row=2, column=3, sticky="we", padx=(0, 6))
-
-        ttk.Label(ai, text="序号宽度:").grid(row=2, column=4, sticky="w", padx=(8, 4))
-        self.seq_width_var = tk.IntVar(value=2)
-        ttk.Spinbox(ai, from_=1, to=4, textvariable=self.seq_width_var, width=5).grid(row=2, column=5, sticky="w")
-
-        ttk.Label(ai, text="每批张数:").grid(row=3, column=0, sticky="w", padx=(8, 4), pady=6)
-        ttk.Spinbox(ai, from_=1, to=20, textvariable=self.batch_size_var, width=5).grid(row=3, column=1, sticky="w", padx=(0, 8), pady=6)
-
-        ttk.Label(ai, text="界面语言:").grid(row=4, column=0, sticky="w", padx=(8, 4))
-        self.ui_lang_combo = ttk.Combobox(ai, textvariable=self._ui_language_display_var, state="readonly", width=16)
-        self.ui_lang_combo.grid(row=4, column=1, sticky="we", padx=(0, 6))
-        self.ui_lang_combo.bind("<<ComboboxSelected>>", self._on_ui_language_selected)
-
-        ttk.Label(ai, text="图意语言:").grid(row=4, column=2, sticky="w", padx=(8, 4))
-        self.intent_lang_combo = ttk.Combobox(ai, textvariable=self._intent_language_display_var, state="readonly", width=18)
-        self.intent_lang_combo.grid(row=4, column=3, sticky="we", padx=(0, 6))
-        self.intent_lang_combo.bind("<<ComboboxSelected>>", self._on_intent_language_selected)
-        self._refresh_language_selectors()
-
-
-        # 选项
-        opts = ttk.Frame(self)
-        opts.pack(side=tk.TOP, fill=tk.X, padx=20, pady=(0, 10))
-        self.verbose_var = tk.BooleanVar(value=True)
-        self.backup_var = tk.BooleanVar(value=True)
-        self.pre_localize_var = tk.BooleanVar(value=False)
-        self.vision_var = tk.BooleanVar(value=True)
-        self.attach_var = tk.StringVar(value=DEFAULT_ATTACH_DIR)
-        self.max_len_var = tk.IntVar(value=80)
-        self.normalize_html_var = tk.BooleanVar(value=True)
-        self.template_var.trace_add("write", lambda *_: self._recalc_all_tabs())
-        self.seq_width_var.trace_add("write", lambda *_: self._recalc_all_tabs())
-        self.max_len_var.trace_add("write", lambda *_: self._recalc_all_tabs())
-
-        ttk.Checkbutton(opts, text="详细日志", variable=self.verbose_var).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Checkbutton(opts, text="写回前备份（推荐）", variable=self.backup_var).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Checkbutton(opts, text="预先收集图片到附件目录", variable=self.pre_localize_var).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Checkbutton(opts, text="启用视觉理解(VLM)", variable=self.vision_var).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Checkbutton(opts, text="规范嵌套HTML图片", variable=self.normalize_html_var).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Label(opts, text="附件目录:").pack(side=tk.LEFT, padx=(8, 4))
-        ttk.Entry(opts, textvariable=self.attach_var, width=16).pack(side=tk.LEFT)
-        ttk.Label(opts, text="文件名最大长度:").pack(side=tk.LEFT, padx=(12, 4))
-        ttk.Spinbox(opts, from_=30, to=200, textvariable=self.max_len_var, width=6).pack(side=tk.LEFT)
-
-        # 操作按钮
         actions = ttk.Frame(self, padding=(20, 8))
         actions.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
-        ttk.Button(actions, text="批量预览（串行）", style="Accent.TButton", command=self._on_batch_preview).pack(side=tk.LEFT, padx=6)
-        ttk.Button(actions, text="查找/替换", command=self._open_find_replace_dialog).pack(side=tk.LEFT, padx=6)
-        ttk.Button(actions, text="停止", command=self._on_stop).pack(side=tk.LEFT, padx=6)
-        ttk.Button(actions, text="退出", command=self.destroy).pack(side=tk.RIGHT, padx=6)
+        batch_btn = ttk.Button(actions, text=self.tr('batch_preview'), style='Accent.TButton', command=self._on_batch_preview)
+        batch_btn.pack(side=tk.LEFT, padx=6)
+        self._bind_text(batch_btn, 'batch_preview')
+        stop_btn = ttk.Button(actions, text=self.tr('stop_button'), command=self._on_stop)
+        stop_btn.pack(side=tk.LEFT, padx=6)
+        self._bind_text(stop_btn, 'stop_button')
+        exit_btn = ttk.Button(actions, text=self.tr('exit_button'), command=self.destroy)
+        exit_btn.pack(side=tk.RIGHT, padx=6)
+        self._bind_text(exit_btn, 'exit_button')
         ttk.Label(
             actions,
             text="提示：SiliconFlow 上多模态建议使用 *VL-Instruct* 类模型（例 Qwen/Qwen2.5-VL-3B-Instruct）。",
@@ -643,10 +263,10 @@ class BatchApp(tk.Tk):
             "verbose": bool(self.verbose_var.get()),
             "backup": bool(self.backup_var.get()),
             "vision": bool(self.vision_var.get()),
-            "batch_size": int(self.batch_size_var.get()),
-            "normalize_html": bool(self.normalize_html_var.get()),
             "ui_language": self.ui_language_var.get().strip() or DEFAULT_UI_LANGUAGE,
             "intent_language": self.intent_language_var.get().strip() or DEFAULT_INTENT_LANGUAGE,
+            "batch_size": int(self.batch_size_var.get()),
+            "normalize_html": bool(self.normalize_html_var.get()),
 
             # 翻译配置
             "trans_base_url": self.trans_base_url_var.get().strip(),
@@ -691,7 +311,6 @@ class BatchApp(tk.Tk):
             self.sum_api_key_var.set(data.get("sum_api_key", self.sum_api_key_var.get()))
             self.sum_model_var.set(data.get("sum_model", self.sum_model_var.get()))
             self.sum_prompt_var.set(data.get("sum_prompt", self.sum_prompt_var.get()))
-            self._refresh_language_selectors()
         except Exception as e:
             messagebox.showerror("错误", f"载入配置失败：{e}")
         self._update_model_summary()
@@ -771,10 +390,6 @@ class BatchApp(tk.Tk):
 
     def _gather_config(self, mode: str) -> Config:
         base = normalize_base_url(self.base_url_var.get().strip())
-        intent_lang = (self.intent_language_var.get().strip() or DEFAULT_INTENT_LANGUAGE)
-        ui_lang = (self.ui_language_var.get().strip() or DEFAULT_UI_LANGUAGE)
-        reason_lang = 'en' if ui_lang == 'en' else 'zh'
-
         return Config(
             mode=mode,
             strategy=self.strategy_var.get().strip(),
@@ -794,180 +409,13 @@ class BatchApp(tk.Tk):
             backup=bool(self.backup_var.get()),
             vision=bool(self.vision_var.get()),
             chunk_size=max(1, int(self.batch_size_var.get())),
-            intent_language=intent_lang,
-            reason_language=reason_lang,
+            intent_language=self.intent_language_var.get().strip() or DEFAULT_INTENT_LANGUAGE,
+            reason_language=self.ui_language_var.get().strip() or DEFAULT_UI_LANGUAGE,
         )
 
     # ------------------------------------------------------------------ #
     # 预览流程（后台线程 -> 主线程更新）
     # ------------------------------------------------------------------ #
-    def _open_find_replace_dialog(self) -> None:
-        tab = self._current_tab()
-        if not tab or not tab.item_uis:
-            messagebox.showinfo("提示", "请先打开并加载一个含有图意条目的标签页。")
-            return
-        if self._find_replace_window and tk.Toplevel.winfo_exists(self._find_replace_window):
-            self._find_replace_window.focus_set()
-            return
-
-        win = tk.Toplevel(self)
-        win.title("查找 / 替换图意")
-        win.resizable(False, False)
-        win.transient(self)
-        win.grab_set()
-        self._find_replace_window = win
-
-        find_var = tk.StringVar()
-        replace_var = tk.StringVar()
-        status_var = tk.StringVar(value="作用范围：当前标签页的图意。")
-        self._find_replace_state = {}
-
-        ttk.Label(win, text="查找内容:").grid(row=0, column=0, sticky="w", padx=8, pady=(12, 4))
-        find_entry = ttk.Entry(win, textvariable=find_var, width=32)
-        find_entry.grid(row=0, column=1, sticky="we", padx=(0, 8), pady=(12, 4))
-
-        ttk.Label(win, text="替换为:").grid(row=1, column=0, sticky="w", padx=8, pady=4)
-        replace_entry = ttk.Entry(win, textvariable=replace_var, width=32)
-        replace_entry.grid(row=1, column=1, sticky="we", padx=(0, 8), pady=4)
-
-        button_row = ttk.Frame(win)
-        button_row.grid(row=2, column=0, columnspan=2, sticky="we", padx=8, pady=(8, 4))
-
-        def current_tab_state() -> Optional[TabState]:
-            cur = self._current_tab()
-            if not cur or not cur.item_uis:
-                return None
-            return cur
-
-        def reset_state(tab_state: Optional[TabState]) -> None:
-            if not tab_state:
-                self._find_replace_state = {}
-            else:
-                self._find_replace_state = {
-                    "tab": str(tab_state.md_path),
-                    "pattern": find_var.get(),
-                    "item_index": -1,
-                    "match_pos": -1,
-                }
-
-        def find_next() -> None:
-            pattern = find_var.get()
-            tab_state = current_tab_state()
-            if not pattern:
-                status_var.set("请输入要查找的文本。")
-                return
-            if not tab_state:
-                status_var.set("当前无可搜索的图意。")
-                return
-
-            state = self._find_replace_state if self._find_replace_state.get("pattern") == pattern and self._find_replace_state.get("tab") == str(tab_state.md_path) else {}
-            start_idx = state.get("item_index", -1)
-            start_pos = state.get("match_pos", -1)
-
-            items = tab_state.item_uis
-            total = len(items)
-            order = list(range(total))
-            if start_idx >= 0:
-                order = list(range(start_idx, total)) + list(range(0, start_idx))
-            for idx in order:
-                text = items[idx].intent_var.get() or ""
-                search_from = 0
-                if idx == start_idx and start_pos >= 0:
-                    search_from = start_pos + 1
-                pos = text.find(pattern, search_from)
-                if pos == -1 and idx != start_idx:
-                    pos = text.find(pattern, 0)
-                if pos != -1:
-                    entry = items[idx].intent_entry
-                    if entry:
-                        entry.focus_set()
-                        entry.selection_range(pos, pos + len(pattern))
-                        entry.icursor(pos + len(pattern))
-                    self._find_replace_state = {
-                        "tab": str(tab_state.md_path),
-                        "pattern": pattern,
-                        "item_index": idx,
-                        "match_pos": pos,
-                    }
-                    status_var.set(f"已定位：第 {idx + 1} 项。")
-                    return
-            status_var.set("未找到匹配内容。")
-            reset_state(tab_state)
-
-        def replace_current() -> None:
-            pattern = find_var.get()
-            replacement = replace_var.get()
-            tab_state = current_tab_state()
-            if not pattern:
-                status_var.set("请输入要查找的文本。")
-                return
-            if not tab_state:
-                status_var.set("当前无可替换的图意。")
-                return
-            state = self._find_replace_state
-            if state.get("pattern") != pattern or state.get("tab") != str(tab_state.md_path) or state.get("item_index", -1) < 0:
-                find_next()
-                return
-            idx = state["item_index"]
-            pos = state.get("match_pos", -1)
-            if pos < 0:
-                find_next()
-                return
-            item = tab_state.item_uis[idx]
-            text = item.intent_var.get() or ""
-            new_text = text[:pos] + replacement + text[pos + len(pattern):]
-            item.intent_var.set(new_text)
-            if item.intent_entry:
-                item.intent_entry.focus_set()
-                item.intent_entry.selection_range(pos, pos + len(replacement))
-                item.intent_entry.icursor(pos + len(replacement))
-            self._recalc_names(tab_state)
-            status_var.set("已替换。")
-            self._find_replace_state = {
-                "tab": str(tab_state.md_path),
-                "pattern": pattern,
-                "item_index": idx,
-                "match_pos": pos + len(replacement) - len(pattern),
-            }
-            find_next()
-
-        def replace_all() -> None:
-            pattern = find_var.get()
-            replacement = replace_var.get()
-            tab_state = current_tab_state()
-            if not pattern:
-                status_var.set("请输入要查找的文本。")
-                return
-            if not tab_state:
-                status_var.set("当前无可替换的图意。")
-                return
-            total = 0
-            for item in tab_state.item_uis:
-                text = item.intent_var.get() or ""
-                if pattern in text:
-                    count = text.count(pattern)
-                    if count:
-                        item.intent_var.set(text.replace(pattern, replacement))
-                        total += count
-            if total:
-                self._recalc_names(tab_state)
-            reset_state(tab_state)
-            status_var.set(f"已替换 {total} 处。" if total else "未找到可替换内容。")
-
-        def close_dialog() -> None:
-            self._find_replace_window = None
-            self._find_replace_state = {}
-            win.destroy()
-
-        ttk.Button(button_row, text="查找下一个", command=find_next).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(button_row, text="替换", command=replace_current).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(button_row, text="全部替换", command=replace_all).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(button_row, text="关闭", command=close_dialog).pack(side=tk.LEFT)
-
-        ttk.Label(win, textvariable=status_var, foreground="#555555").grid(row=3, column=0, columnspan=2, sticky="w", padx=8, pady=(4, 10))
-
-        win.protocol("WM_DELETE_WINDOW", close_dialog)
-        find_entry.focus_set()
     def _on_batch_preview(self) -> None:
         if not self.files:
             messagebox.showinfo("提示", "请先添加 Markdown 文件。")
@@ -1346,8 +794,7 @@ class BatchApp(tk.Tk):
             ttk.Label(row, text=src_disp, width=48).grid(row=0, column=1, sticky="w")
 
             intent_var = tk.StringVar(value=item_data.get("normalized_title") or "图意")
-            intent_entry = ttk.Entry(row, textvariable=intent_var, width=36)
-            intent_entry.grid(row=0, column=2, sticky="w")
+            ttk.Entry(row, textvariable=intent_var, width=36).grid(row=0, column=2, sticky="w")
 
             final_var = tk.StringVar(value="")
             ttk.Entry(row, textvariable=final_var, width=36, state="readonly").grid(row=0, column=3, sticky="w")
@@ -1377,7 +824,6 @@ class BatchApp(tk.Tk):
                 apply_one_btn=apply_one_btn,
                 skip_var=skip_var,
                 skip_check=skip_check,
-                intent_entry=intent_entry,
             )
             tab.item_uis.append(item_ui)
 
@@ -1429,7 +875,7 @@ class BatchApp(tk.Tk):
                 item.final_var.set("（将删除）")
                 continue
 
-            intent = sanitize_filename(item.intent_var.get() or "图意")
+            intent = sanitize_filename(self._format_intent_for_language(item.intent_var.get() or "图意"))
             counts[intent] = counts.get(intent, 0) + 1
             dup_idx = counts[intent]
             final_name = name_with_template(
@@ -1440,6 +886,7 @@ class BatchApp(tk.Tk):
                 intent,
                 seq_w,
                 max_len,
+                intent_language=self.intent_language_var.get().strip() or DEFAULT_INTENT_LANGUAGE,
                 global_index=item.index,
                 dup_index=dup_idx,
             )
@@ -1481,6 +928,8 @@ class BatchApp(tk.Tk):
             title_attr,
             vision_src=vision_src,
             base_url=base,
+            intent_language=self.intent_language_var.get().strip() or DEFAULT_INTENT_LANGUAGE,
+            reason_language=self.ui_language_var.get().strip() or DEFAULT_UI_LANGUAGE,
         )
         out = call_openai_chat(
             base,
@@ -1558,7 +1007,8 @@ class BatchApp(tk.Tk):
 
             def apply_result() -> None:
                 candidates = result.get("candidates") or []
-                normalized = sanitize_filename(result.get("normalized_title") or "")
+                raw_title = result.get("normalized_title") or ""
+                normalized = sanitize_filename(self._format_intent_for_language(raw_title))
 
                 if self.verbose_var.get():
                     # 显示LLM返回结果摘要
@@ -1864,7 +1314,8 @@ class BatchApp(tk.Tk):
             for cand in candidates:
                 if not isinstance(cand, dict):
                     continue
-                title_text = sanitize_filename(cand.get("title") or "")
+                title_raw = cand.get("title") or ""
+                title_text = sanitize_filename(self._format_intent_for_language(title_raw))
                 if not title_text:
                     continue
                 sanitized.append(title_text)
@@ -1917,12 +1368,12 @@ class BatchApp(tk.Tk):
                 if cand not in ordered_candidates and isinstance(cand, dict):
                     ordered_candidates.append(cand)
             if preferred_strategy in strategy_pick:
-                preferred_title = sanitize_filename(strategy_pick[preferred_strategy].get("title") or "")
+                preferred_title = sanitize_filename(self._format_intent_for_language(strategy_pick[preferred_strategy].get("title") or ""))
         else:
             ordered_candidates = []
         if not ordered_candidates:
             ordered_candidates = candidates_data if isinstance(candidates_data, list) else []
-        current_title = sanitize_filename(item.intent_var.get() or "")
+        current_title = sanitize_filename(self._format_intent_for_language(item.intent_var.get() or ""))
         render_candidates(ordered_candidates, preferred_title or current_title or None)
         ttk.Label(cand_frame, textvariable=status_var, foreground="#666").pack(anchor="w", padx=6, pady=(0, 4))
 
@@ -1957,7 +1408,8 @@ class BatchApp(tk.Tk):
             def regen_success(result: Dict) -> None:
                 regen_btn.config(state=tk.NORMAL)
                 cand_list = result.get("candidates") or []
-                normalized = sanitize_filename(result.get("normalized_title") or "")
+                raw_title = result.get("normalized_title") or ""
+                normalized = sanitize_filename(self._format_intent_for_language(raw_title))
                 render_candidates(cand_list if isinstance(cand_list, list) else [], normalized or None)
                 if normalized:
                     item.intent_var.set(normalized)
@@ -1983,9 +1435,10 @@ class BatchApp(tk.Tk):
         def apply_choice(go_next: bool) -> None:
             choice = selected_var.get()
             if choice == "__custom__":
-                chosen = sanitize_filename(custom_var.get() or "")
+                chosen_raw = custom_var.get() or ""
             else:
-                chosen = sanitize_filename(choice or "")
+                chosen_raw = choice or ""
+            chosen = sanitize_filename(self._format_intent_for_language(chosen_raw))
             if not chosen:
                 messagebox.showerror("错误", "请先选择或输入图意。", parent=dlg)
                 return
@@ -2041,7 +1494,7 @@ class BatchApp(tk.Tk):
         self._recalc_names(tab)
         skip_set: Set[int] = {item.index for item in tab.item_uis if item.skip_var.get()}
         chosen_map = {
-            item.index: sanitize_filename(item.intent_var.get() or "图意")
+            item.index: sanitize_filename(self._format_intent_for_language(item.intent_var.get() or "图意"))
             for item in tab.item_uis
             if item.index not in skip_set
         }
@@ -2431,6 +1884,8 @@ class BatchApp(tk.Tk):
                 None,
                 vision_src=asset["data_url"],
                 base_url=base,
+                intent_language=self.intent_language_var.get().strip() or DEFAULT_INTENT_LANGUAGE,
+                reason_language=self.ui_language_var.get().strip() or DEFAULT_UI_LANGUAGE,
             )
             out = call_openai_chat(
                 base,

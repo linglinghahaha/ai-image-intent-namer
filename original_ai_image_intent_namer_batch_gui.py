@@ -98,22 +98,6 @@ DEFAULT_NAME_TEMPLATE = "{title}_{index:02d}_{intent}"
 DEFAULT_ATTACH_DIR = "attachments"
 PLAN_HISTORY_FILENAME = ".image_plan.history.log"
 
-DEFAULT_UI_LANGUAGE = "zh"
-DEFAULT_INTENT_LANGUAGE = "auto"
-UI_LANGUAGE_ORDER = ("zh", "en")
-INTENT_LANGUAGE_ORDER = ("auto", "zh", "en")
-LANGUAGE_DISPLAY = {
-    "ui": {
-        "zh": {"zh": "中文", "en": "Chinese"},
-        "en": {"zh": "英文", "en": "English"},
-    },
-    "intent": {
-        "auto": {"zh": "跟随原文语言", "en": "Match Source Language"},
-        "zh": {"zh": "翻译成中文", "en": "Translate to Chinese"},
-        "en": {"zh": "输出英文", "en": "Output English"},
-    },
-}
-
 VISION_TEST_ASSETS = [
     {
         "name": "红色像素",
@@ -160,7 +144,6 @@ class ItemUI:
     apply_one_btn: ttk.Button
     skip_var: tk.BooleanVar
     skip_check: ttk.Checkbutton
-    intent_entry: Optional[ttk.Entry] = None
 
 
 @dataclass
@@ -184,16 +167,6 @@ class TabState:
 class BatchApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.ui_language_var = tk.StringVar(value=DEFAULT_UI_LANGUAGE)
-        self.intent_language_var = tk.StringVar(value=DEFAULT_INTENT_LANGUAGE)
-        self._ui_language_display_var = tk.StringVar()
-        self._intent_language_display_var = tk.StringVar()
-        self._ui_lang_value_to_code: Dict[str, str] = {}
-        self._intent_lang_value_to_code: Dict[str, str] = {}
-        self.ui_language_var.trace_add("write", self._on_ui_language_changed)
-        self.intent_language_var.trace_add("write", self._on_intent_language_changed)
-        self._find_replace_window: Optional[tk.Toplevel] = None
-        self._find_replace_state: Dict[str, object] = {}
         self._init_styles()
         self.title(APP_TITLE)
         self.geometry("1100x720")
@@ -207,58 +180,9 @@ class BatchApp(tk.Tk):
         self._build_widgets()
         self._load_profiles()
 
-    def _language_label(self, category: str, code: str, ui_lang: Optional[str] = None) -> str:
-        table = LANGUAGE_DISPLAY.get(category, {})
-        lang = ui_lang or self.ui_language_var.get() or DEFAULT_UI_LANGUAGE
-        entry = table.get(code, {})
-        return entry.get(lang) or entry.get(DEFAULT_UI_LANGUAGE, code)
-
-    def _refresh_language_selectors(self) -> None:
-        ui_lang = (self.ui_language_var.get() or DEFAULT_UI_LANGUAGE).strip() or DEFAULT_UI_LANGUAGE
-        intent_lang = (self.intent_language_var.get() or DEFAULT_INTENT_LANGUAGE).strip() or DEFAULT_INTENT_LANGUAGE
-
-        ui_labels = [self._language_label("ui", code, ui_lang) for code in UI_LANGUAGE_ORDER]
-        self._ui_lang_value_to_code = {label: code for label, code in zip(ui_labels, UI_LANGUAGE_ORDER)}
-        if hasattr(self, "ui_lang_combo"):
-            self.ui_lang_combo.configure(values=ui_labels)
-        self._ui_language_display_var.set(self._language_label("ui", ui_lang, ui_lang))
-
-        intent_labels = [self._language_label("intent", code, ui_lang) for code in INTENT_LANGUAGE_ORDER]
-        self._intent_lang_value_to_code = {label: code for label, code in zip(intent_labels, INTENT_LANGUAGE_ORDER)}
-        if hasattr(self, "intent_lang_combo"):
-            self.intent_lang_combo.configure(values=intent_labels)
-        self._intent_language_display_var.set(self._language_label("intent", intent_lang, ui_lang))
-
-    def _on_ui_language_selected(self, _event: Optional[tk.Event] = None) -> None:
-        code = self._ui_lang_value_to_code.get(self._ui_language_display_var.get())
-        if code and code != self.ui_language_var.get():
-            self.ui_language_var.set(code)
-
-    def _on_intent_language_selected(self, _event: Optional[tk.Event] = None) -> None:
-        code = self._intent_lang_value_to_code.get(self._intent_language_display_var.get())
-        if code and code != self.intent_language_var.get():
-            self.intent_language_var.set(code)
-
-    def _on_ui_language_changed(self, *_args: object) -> None:
-        self._refresh_language_selectors()
-
-    def _on_intent_language_changed(self, *_args: object) -> None:
-        self._refresh_language_selectors()
-        self._recalc_all_tabs()
-
     # ------------------------------------------------------------------ #
     # UI 构建与日志
     # ------------------------------------------------------------------ #
-    def _current_tab(self) -> Optional[TabState]:
-        try:
-            current_id = self.nb.select()
-        except Exception:
-            return None
-        for tab in self.tabs.values():
-            if str(tab.page) == current_id:
-                return tab
-        return None
-
     def _init_styles(self) -> None:
         style = ttk.Style(self)
         try:
@@ -361,17 +285,6 @@ class BatchApp(tk.Tk):
         ttk.Label(ai, text="每批张数:").grid(row=3, column=0, sticky="w", padx=(8, 4), pady=6)
         ttk.Spinbox(ai, from_=1, to=20, textvariable=self.batch_size_var, width=5).grid(row=3, column=1, sticky="w", padx=(0, 8), pady=6)
 
-        ttk.Label(ai, text="界面语言:").grid(row=4, column=0, sticky="w", padx=(8, 4))
-        self.ui_lang_combo = ttk.Combobox(ai, textvariable=self._ui_language_display_var, state="readonly", width=16)
-        self.ui_lang_combo.grid(row=4, column=1, sticky="we", padx=(0, 6))
-        self.ui_lang_combo.bind("<<ComboboxSelected>>", self._on_ui_language_selected)
-
-        ttk.Label(ai, text="图意语言:").grid(row=4, column=2, sticky="w", padx=(8, 4))
-        self.intent_lang_combo = ttk.Combobox(ai, textvariable=self._intent_language_display_var, state="readonly", width=18)
-        self.intent_lang_combo.grid(row=4, column=3, sticky="we", padx=(0, 6))
-        self.intent_lang_combo.bind("<<ComboboxSelected>>", self._on_intent_language_selected)
-        self._refresh_language_selectors()
-
 
         # 选项
         opts = ttk.Frame(self)
@@ -401,7 +314,6 @@ class BatchApp(tk.Tk):
         actions = ttk.Frame(self, padding=(20, 8))
         actions.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
         ttk.Button(actions, text="批量预览（串行）", style="Accent.TButton", command=self._on_batch_preview).pack(side=tk.LEFT, padx=6)
-        ttk.Button(actions, text="查找/替换", command=self._open_find_replace_dialog).pack(side=tk.LEFT, padx=6)
         ttk.Button(actions, text="停止", command=self._on_stop).pack(side=tk.LEFT, padx=6)
         ttk.Button(actions, text="退出", command=self.destroy).pack(side=tk.RIGHT, padx=6)
         ttk.Label(
@@ -645,8 +557,6 @@ class BatchApp(tk.Tk):
             "vision": bool(self.vision_var.get()),
             "batch_size": int(self.batch_size_var.get()),
             "normalize_html": bool(self.normalize_html_var.get()),
-            "ui_language": self.ui_language_var.get().strip() or DEFAULT_UI_LANGUAGE,
-            "intent_language": self.intent_language_var.get().strip() or DEFAULT_INTENT_LANGUAGE,
 
             # 翻译配置
             "trans_base_url": self.trans_base_url_var.get().strip(),
@@ -679,8 +589,6 @@ class BatchApp(tk.Tk):
             self.vision_var.set(bool(data.get("vision", self.vision_var.get())))
             self.batch_size_var.set(int(data.get("batch_size", self.batch_size_var.get())))
             self.normalize_html_var.set(bool(data.get("normalize_html", self.normalize_html_var.get())))
-            self.ui_language_var.set(data.get("ui_language", self.ui_language_var.get()))
-            self.intent_language_var.set(data.get("intent_language", self.intent_language_var.get()))
 
             # 翻译/归纳配置
             self.trans_base_url_var.set(data.get("trans_base_url", self.trans_base_url_var.get()))
@@ -691,7 +599,6 @@ class BatchApp(tk.Tk):
             self.sum_api_key_var.set(data.get("sum_api_key", self.sum_api_key_var.get()))
             self.sum_model_var.set(data.get("sum_model", self.sum_model_var.get()))
             self.sum_prompt_var.set(data.get("sum_prompt", self.sum_prompt_var.get()))
-            self._refresh_language_selectors()
         except Exception as e:
             messagebox.showerror("错误", f"载入配置失败：{e}")
         self._update_model_summary()
@@ -771,10 +678,6 @@ class BatchApp(tk.Tk):
 
     def _gather_config(self, mode: str) -> Config:
         base = normalize_base_url(self.base_url_var.get().strip())
-        intent_lang = (self.intent_language_var.get().strip() or DEFAULT_INTENT_LANGUAGE)
-        ui_lang = (self.ui_language_var.get().strip() or DEFAULT_UI_LANGUAGE)
-        reason_lang = 'en' if ui_lang == 'en' else 'zh'
-
         return Config(
             mode=mode,
             strategy=self.strategy_var.get().strip(),
@@ -794,180 +697,11 @@ class BatchApp(tk.Tk):
             backup=bool(self.backup_var.get()),
             vision=bool(self.vision_var.get()),
             chunk_size=max(1, int(self.batch_size_var.get())),
-            intent_language=intent_lang,
-            reason_language=reason_lang,
         )
 
     # ------------------------------------------------------------------ #
     # 预览流程（后台线程 -> 主线程更新）
     # ------------------------------------------------------------------ #
-    def _open_find_replace_dialog(self) -> None:
-        tab = self._current_tab()
-        if not tab or not tab.item_uis:
-            messagebox.showinfo("提示", "请先打开并加载一个含有图意条目的标签页。")
-            return
-        if self._find_replace_window and tk.Toplevel.winfo_exists(self._find_replace_window):
-            self._find_replace_window.focus_set()
-            return
-
-        win = tk.Toplevel(self)
-        win.title("查找 / 替换图意")
-        win.resizable(False, False)
-        win.transient(self)
-        win.grab_set()
-        self._find_replace_window = win
-
-        find_var = tk.StringVar()
-        replace_var = tk.StringVar()
-        status_var = tk.StringVar(value="作用范围：当前标签页的图意。")
-        self._find_replace_state = {}
-
-        ttk.Label(win, text="查找内容:").grid(row=0, column=0, sticky="w", padx=8, pady=(12, 4))
-        find_entry = ttk.Entry(win, textvariable=find_var, width=32)
-        find_entry.grid(row=0, column=1, sticky="we", padx=(0, 8), pady=(12, 4))
-
-        ttk.Label(win, text="替换为:").grid(row=1, column=0, sticky="w", padx=8, pady=4)
-        replace_entry = ttk.Entry(win, textvariable=replace_var, width=32)
-        replace_entry.grid(row=1, column=1, sticky="we", padx=(0, 8), pady=4)
-
-        button_row = ttk.Frame(win)
-        button_row.grid(row=2, column=0, columnspan=2, sticky="we", padx=8, pady=(8, 4))
-
-        def current_tab_state() -> Optional[TabState]:
-            cur = self._current_tab()
-            if not cur or not cur.item_uis:
-                return None
-            return cur
-
-        def reset_state(tab_state: Optional[TabState]) -> None:
-            if not tab_state:
-                self._find_replace_state = {}
-            else:
-                self._find_replace_state = {
-                    "tab": str(tab_state.md_path),
-                    "pattern": find_var.get(),
-                    "item_index": -1,
-                    "match_pos": -1,
-                }
-
-        def find_next() -> None:
-            pattern = find_var.get()
-            tab_state = current_tab_state()
-            if not pattern:
-                status_var.set("请输入要查找的文本。")
-                return
-            if not tab_state:
-                status_var.set("当前无可搜索的图意。")
-                return
-
-            state = self._find_replace_state if self._find_replace_state.get("pattern") == pattern and self._find_replace_state.get("tab") == str(tab_state.md_path) else {}
-            start_idx = state.get("item_index", -1)
-            start_pos = state.get("match_pos", -1)
-
-            items = tab_state.item_uis
-            total = len(items)
-            order = list(range(total))
-            if start_idx >= 0:
-                order = list(range(start_idx, total)) + list(range(0, start_idx))
-            for idx in order:
-                text = items[idx].intent_var.get() or ""
-                search_from = 0
-                if idx == start_idx and start_pos >= 0:
-                    search_from = start_pos + 1
-                pos = text.find(pattern, search_from)
-                if pos == -1 and idx != start_idx:
-                    pos = text.find(pattern, 0)
-                if pos != -1:
-                    entry = items[idx].intent_entry
-                    if entry:
-                        entry.focus_set()
-                        entry.selection_range(pos, pos + len(pattern))
-                        entry.icursor(pos + len(pattern))
-                    self._find_replace_state = {
-                        "tab": str(tab_state.md_path),
-                        "pattern": pattern,
-                        "item_index": idx,
-                        "match_pos": pos,
-                    }
-                    status_var.set(f"已定位：第 {idx + 1} 项。")
-                    return
-            status_var.set("未找到匹配内容。")
-            reset_state(tab_state)
-
-        def replace_current() -> None:
-            pattern = find_var.get()
-            replacement = replace_var.get()
-            tab_state = current_tab_state()
-            if not pattern:
-                status_var.set("请输入要查找的文本。")
-                return
-            if not tab_state:
-                status_var.set("当前无可替换的图意。")
-                return
-            state = self._find_replace_state
-            if state.get("pattern") != pattern or state.get("tab") != str(tab_state.md_path) or state.get("item_index", -1) < 0:
-                find_next()
-                return
-            idx = state["item_index"]
-            pos = state.get("match_pos", -1)
-            if pos < 0:
-                find_next()
-                return
-            item = tab_state.item_uis[idx]
-            text = item.intent_var.get() or ""
-            new_text = text[:pos] + replacement + text[pos + len(pattern):]
-            item.intent_var.set(new_text)
-            if item.intent_entry:
-                item.intent_entry.focus_set()
-                item.intent_entry.selection_range(pos, pos + len(replacement))
-                item.intent_entry.icursor(pos + len(replacement))
-            self._recalc_names(tab_state)
-            status_var.set("已替换。")
-            self._find_replace_state = {
-                "tab": str(tab_state.md_path),
-                "pattern": pattern,
-                "item_index": idx,
-                "match_pos": pos + len(replacement) - len(pattern),
-            }
-            find_next()
-
-        def replace_all() -> None:
-            pattern = find_var.get()
-            replacement = replace_var.get()
-            tab_state = current_tab_state()
-            if not pattern:
-                status_var.set("请输入要查找的文本。")
-                return
-            if not tab_state:
-                status_var.set("当前无可替换的图意。")
-                return
-            total = 0
-            for item in tab_state.item_uis:
-                text = item.intent_var.get() or ""
-                if pattern in text:
-                    count = text.count(pattern)
-                    if count:
-                        item.intent_var.set(text.replace(pattern, replacement))
-                        total += count
-            if total:
-                self._recalc_names(tab_state)
-            reset_state(tab_state)
-            status_var.set(f"已替换 {total} 处。" if total else "未找到可替换内容。")
-
-        def close_dialog() -> None:
-            self._find_replace_window = None
-            self._find_replace_state = {}
-            win.destroy()
-
-        ttk.Button(button_row, text="查找下一个", command=find_next).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(button_row, text="替换", command=replace_current).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(button_row, text="全部替换", command=replace_all).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(button_row, text="关闭", command=close_dialog).pack(side=tk.LEFT)
-
-        ttk.Label(win, textvariable=status_var, foreground="#555555").grid(row=3, column=0, columnspan=2, sticky="w", padx=8, pady=(4, 10))
-
-        win.protocol("WM_DELETE_WINDOW", close_dialog)
-        find_entry.focus_set()
     def _on_batch_preview(self) -> None:
         if not self.files:
             messagebox.showinfo("提示", "请先添加 Markdown 文件。")
@@ -1346,8 +1080,7 @@ class BatchApp(tk.Tk):
             ttk.Label(row, text=src_disp, width=48).grid(row=0, column=1, sticky="w")
 
             intent_var = tk.StringVar(value=item_data.get("normalized_title") or "图意")
-            intent_entry = ttk.Entry(row, textvariable=intent_var, width=36)
-            intent_entry.grid(row=0, column=2, sticky="w")
+            ttk.Entry(row, textvariable=intent_var, width=36).grid(row=0, column=2, sticky="w")
 
             final_var = tk.StringVar(value="")
             ttk.Entry(row, textvariable=final_var, width=36, state="readonly").grid(row=0, column=3, sticky="w")
@@ -1377,7 +1110,6 @@ class BatchApp(tk.Tk):
                 apply_one_btn=apply_one_btn,
                 skip_var=skip_var,
                 skip_check=skip_check,
-                intent_entry=intent_entry,
             )
             tab.item_uis.append(item_ui)
 
