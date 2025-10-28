@@ -1232,8 +1232,28 @@ def name_with_template(
         "index": index_formatted,
         "dup": dup_formatted,
     }
-    out = tmpl
+
+    text_field_pattern = re.compile(r"\{(?P<key>title|intent)(?::\.?(?P<limit>\d+))?\}")
+
+    def replace_text_fields(tmpl: str) -> str:
+        def repl(match: re.Match) -> str:
+            key = match.group("key")
+            limit = match.group("limit")
+            value = mapping.get(key, "")
+            if limit:
+                try:
+                    n = max(0, int(limit))
+                    value = value[:n]
+                except Exception:
+                    pass
+            return value
+
+        return text_field_pattern.sub(repl, tmpl)
+
+    out = replace_text_fields(tmpl)
     for k, v in mapping.items():
+        if k in ("title", "intent"):
+            continue
         out = out.replace("{" + k + "}", v)
     out = sanitize_intent_for_language(out, intent_language)
     # 如模板或意图末尾仍出现扩展名，去除以防重复扩展

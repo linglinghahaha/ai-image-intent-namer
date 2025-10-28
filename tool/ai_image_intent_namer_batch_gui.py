@@ -113,6 +113,14 @@ LANGUAGE_DISPLAY = {
         "en": {"zh": "输出英文", "en": "Output English"},
     },
 }
+TEMPLATE_PLACEHOLDERS = [
+    ("{title}", "Markdown 标题，已剔除非法字符；支持 {title:.20} 仅保留前20字符。"),
+    ("{intent}", "AI 生成的图意短语；支持 {intent:.16} 截取前16字符。"),
+    ("{block}", "所在块序号，默认宽度沿用编号宽度设置，可写 {block:02d}。"),
+    ("{idx}", "同一块内图片序号，可写 {idx:02d} 控制宽度。"),
+    ("{index}", "全局累计序号，可写 {index:03d} 等格式化。"),
+    ("{dup}", "当文件名重复时的去重序号，可写 {dup:02d} 控制宽度。"),
+]
 
 VISION_TEST_ASSETS = [
     {
@@ -194,6 +202,13 @@ class BatchApp(tk.Tk):
         self.intent_language_var.trace_add("write", self._on_intent_language_changed)
         self._find_replace_window: Optional[tk.Toplevel] = None
         self._find_replace_state: Dict[str, object] = {}
+        self.todo_items: List[str] = []
+        self._todo_window: Optional[tk.Toplevel] = None
+        self._todo_listbox: Optional[tk.Listbox] = None
+        self._template_helper_window: Optional[tk.Toplevel] = None
+        self._template_helper_tree: Optional[ttk.Treeview] = None
+        self._template_preview_var = tk.StringVar(value="")
+        self.template_entry: Optional[ttk.Entry] = None
         self._init_styles()
         self.title(APP_TITLE)
         self.geometry("1100x720")
@@ -203,6 +218,7 @@ class BatchApp(tk.Tk):
         self.stop_flag = False
         self.tabs: Dict[str, TabState] = {}
         self.profiles: Dict[str, Dict] = {}
+        self._add_todo_item("界面语言切换支持完整英文化（待实现）")
 
         self._build_widgets()
         self._load_profiles()
@@ -229,6 +245,212 @@ class BatchApp(tk.Tk):
             self.intent_lang_combo.configure(values=intent_labels)
         self._intent_language_display_var.set(self._language_label("intent", intent_lang, ui_lang))
 
+    def _add_todo_item(self, text: str) -> None:
+        item = (text or "").strip()
+        if not item:
+            return
+        if item not in self.todo_items:
+            self.todo_items.append(item)
+            if hasattr(self, "log_text"):
+                self._log(f"TODO: {item}")
+        self._refresh_todo_list()
+
+    def _refresh_todo_list(self) -> None:
+        if not (self._todo_window and tk.Toplevel.winfo_exists(self._todo_window)):
+            return
+        if not self._todo_listbox:
+            return
+        self._todo_listbox.delete(0, tk.END)
+        for item in self.todo_items:
+            self._todo_listbox.insert(tk.END, f"• {item}")
+
+    def _open_todo_list(self) -> None:
+        if self._todo_window and tk.Toplevel.winfo_exists(self._todo_window):
+            self._todo_window.focus_set()
+            self._refresh_todo_list()
+            return
+
+        win = tk.Toplevel(self)
+        win.title("待办事项")
+        win.transient(self)
+        win.geometry("360x260")
+        container = ttk.Frame(win, padding=12)
+        container.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(container, text="当前待完成的功能需求：", anchor="w").pack(fill=tk.X)
+        listbox = tk.Listbox(container, height=8, activestyle="none")
+        listbox.pack(fill=tk.BOTH, expand=True, pady=8)
+        ttk.Label(
+            container,
+            text="提示：双击待办可以复制到剪贴板。",
+            foreground="#666",
+            anchor="w",
+        ).pack(fill=tk.X, pady=(0, 8))
+
+        btns = ttk.Frame(container)
+        btns.pack(fill=tk.X)
+        ttk.Button(
+            btns,
+            text="复制全部",
+            command=lambda: (self.clipboard_clear(), self.clipboard_append("\n".join(self.todo_items))),
+        ).pack(side=tk.LEFT)
+        ttk.Button(btns, text="关闭", command=lambda: win.destroy()).pack(side=tk.RIGHT)
+
+        def on_copy(event: tk.Event) -> None:
+            selection = listbox.curselection()
+            if not selection:
+                return
+            idx = selection[0]
+            if idx >= len(self.todo_items):
+                return
+            item = self.todo_items[idx]
+            self.clipboard_clear()
+            self.clipboard_append(item)
+
+        listbox.bind("<Double-Button-1>", on_copy)
+
+        self._todo_window = win
+        self._todo_listbox = listbox
+        self._refresh_todo_list()
+
+        def _cleanup(_event: Optional[tk.Event] = None) -> None:
+            self._todo_window = None
+            self._todo_listbox = None
+
+        win.bind("<Destroy>", _cleanup)
+
+    def _insert_template_placeholder(self, token: str) -> None:
+        token = (token or "").strip()
+        if not token:
+            return
+        entry: Optional[ttk.Entry] = getattr(self, "template_entry", None)
+        if entry and entry.winfo_exists():
+            entry.focus_set()
+            pos = entry.index(tk.INSERT)
+            entry.insert(pos, token)
+        else:
+            current = self.template_var.get()
+            self.template_var.set((current or "") + token)
+        self._update_template_preview()
+
+    def _open_template_helper(self) -> None:
+        if self._template_helper_window and tk.Toplevel.winfo_exists(self._template_helper_window):
+            self._template_helper_window.focus_set()
+            self._update_template_preview()
+            return
+
+        win = tk.Toplevel(self)
+        win.title("命名模板向导")
+        win.transient(self)
+        win.geometry("520x420")
+
+        container = ttk.Frame(win, padding=12)
+        container.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(
+            container,
+            text="双击或选中后点击“插入”将占位符写入命名模板。",
+            anchor="w",
+        ).pack(fill=tk.X)
+        ttk.Label(
+            container,
+            text="支持 {title:.20} / {intent:.16} 之类的格式用于截取前N个字符。",
+            anchor="w",
+            foreground="#555",
+        ).pack(fill=tk.X, pady=(2, 0))
+
+        columns = ("token", "desc")
+        tree = ttk.Treeview(container, columns=columns, show="headings", height=6)
+        tree.heading("token", text="占位符")
+        tree.heading("desc", text="含义说明")
+        tree.column("token", width=130, anchor="center")
+        tree.column("desc", anchor="w", width=360)
+        for token, desc in TEMPLATE_PLACEHOLDERS:
+            tree.insert("", tk.END, values=(token, desc))
+        tree.pack(fill=tk.BOTH, expand=True, pady=(6, 10))
+
+        def insert_current() -> None:
+            selected = tree.selection()
+            if not selected:
+                return
+            token = tree.item(selected[0], "values")[0]
+            self._insert_template_placeholder(str(token))
+
+        def copy_current() -> None:
+            selected = tree.selection()
+            if not selected:
+                return
+            token = tree.item(selected[0], "values")[0]
+            self.clipboard_clear()
+            self.clipboard_append(token)
+
+        tree.bind("<Double-Button-1>", lambda _e: insert_current())
+        tree.bind("<Return>", lambda _e: insert_current())
+
+        sample_info = ttk.LabelFrame(container, text="示例上下文")
+        sample_info.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(
+            sample_info,
+            text="标题=《示例文章》  块号=1  图片序号=2  全局序号=2  去重序号=1  图意=“森林日落”",
+            anchor="w",
+        ).pack(fill=tk.X, padx=8, pady=6)
+
+        preview_box = ttk.LabelFrame(container, text="实时预览")
+        preview_box.pack(fill=tk.X)
+        ttk.Label(
+            preview_box,
+            textvariable=self._template_preview_var,
+            foreground="#1a7f37",
+            anchor="w",
+        ).pack(fill=tk.X, padx=8, pady=6)
+
+        btns = ttk.Frame(container)
+        btns.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(btns, text="插入选中", command=insert_current).pack(side=tk.LEFT)
+        ttk.Button(btns, text="复制选中", command=copy_current).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(btns, text="关闭", command=win.destroy).pack(side=tk.RIGHT)
+
+        def _cleanup(_event: Optional[tk.Event] = None) -> None:
+            self._template_helper_window = None
+            self._template_helper_tree = None
+
+        win.bind("<Destroy>", _cleanup)
+
+        self._template_helper_window = win
+        self._template_helper_tree = tree
+        self._update_template_preview()
+
+    def _update_template_preview(self, *_args: object) -> None:
+        template = self.template_var.get() or DEFAULT_NAME_TEMPLATE
+        try:
+            seq_width = max(1, int(self.seq_width_var.get()))
+        except Exception:
+            seq_width = 2
+        try:
+            max_len = max(10, int(self.max_len_var.get()))
+        except Exception:
+            max_len = 80
+        intent_lang = (self.intent_language_var.get().strip() or DEFAULT_INTENT_LANGUAGE) if hasattr(self, "intent_language_var") else DEFAULT_INTENT_LANGUAGE
+        try:
+            preview = core.name_with_template(
+                template=template,
+                title="示例文章",
+                block_idx=1,
+                img_idx=2,
+                intent_phrase="森林日落",
+                seq_width=seq_width,
+                max_len=max_len,
+                intent_language=intent_lang,
+                global_index=2,
+                dup_index=1,
+            )
+        except Exception as exc:
+            preview = f"(生成预览失败: {exc})"
+        self._template_preview_var.set(preview.strip())
+
+    def _on_name_rule_changed(self, *_args: object) -> None:
+        self._recalc_all_tabs()
+        self._update_template_preview()
+
     def _on_ui_language_selected(self, _event: Optional[tk.Event] = None) -> None:
         code = self._ui_lang_value_to_code.get(self._ui_language_display_var.get())
         if code and code != self.ui_language_var.get():
@@ -241,9 +463,11 @@ class BatchApp(tk.Tk):
 
     def _on_ui_language_changed(self, *_args: object) -> None:
         self._refresh_language_selectors()
+        self._update_template_preview()
 
     def _on_intent_language_changed(self, *_args: object) -> None:
         self._refresh_language_selectors()
+        self._update_template_preview()
         self._recalc_all_tabs()
 
     # ------------------------------------------------------------------ #
@@ -352,7 +576,12 @@ class BatchApp(tk.Tk):
 
         ttk.Label(ai, text="命名模板:").grid(row=2, column=2, sticky="w", padx=(8, 4))
         self.template_var = tk.StringVar(value=DEFAULT_NAME_TEMPLATE)
-        ttk.Entry(ai, textvariable=self.template_var, width=26).grid(row=2, column=3, sticky="we", padx=(0, 6))
+        template_frame = ttk.Frame(ai)
+        template_frame.grid(row=2, column=3, sticky="we", padx=(0, 6))
+        template_frame.columnconfigure(0, weight=1)
+        self.template_entry = ttk.Entry(template_frame, textvariable=self.template_var)
+        self.template_entry.grid(row=0, column=0, sticky="we")
+        ttk.Button(template_frame, text="模板向导", command=self._open_template_helper).grid(row=0, column=1, padx=(6, 0))
 
         ttk.Label(ai, text="序号宽度:").grid(row=2, column=4, sticky="w", padx=(8, 4))
         self.seq_width_var = tk.IntVar(value=2)
@@ -383,9 +612,9 @@ class BatchApp(tk.Tk):
         self.attach_var = tk.StringVar(value=DEFAULT_ATTACH_DIR)
         self.max_len_var = tk.IntVar(value=80)
         self.normalize_html_var = tk.BooleanVar(value=True)
-        self.template_var.trace_add("write", lambda *_: self._recalc_all_tabs())
-        self.seq_width_var.trace_add("write", lambda *_: self._recalc_all_tabs())
-        self.max_len_var.trace_add("write", lambda *_: self._recalc_all_tabs())
+        self.template_var.trace_add("write", self._on_name_rule_changed)
+        self.seq_width_var.trace_add("write", self._on_name_rule_changed)
+        self.max_len_var.trace_add("write", self._on_name_rule_changed)
 
         ttk.Checkbutton(opts, text="详细日志", variable=self.verbose_var).pack(side=tk.LEFT, padx=(0, 12))
         ttk.Checkbutton(opts, text="写回前备份（推荐）", variable=self.backup_var).pack(side=tk.LEFT, padx=(0, 12))
@@ -402,6 +631,7 @@ class BatchApp(tk.Tk):
         actions.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
         ttk.Button(actions, text="批量预览（串行）", style="Accent.TButton", command=self._on_batch_preview).pack(side=tk.LEFT, padx=6)
         ttk.Button(actions, text="查找/替换", command=self._open_find_replace_dialog).pack(side=tk.LEFT, padx=6)
+        ttk.Button(actions, text="待办事项", command=self._open_todo_list).pack(side=tk.LEFT, padx=6)
         ttk.Button(actions, text="停止", command=self._on_stop).pack(side=tk.LEFT, padx=6)
         ttk.Button(actions, text="退出", command=self.destroy).pack(side=tk.RIGHT, padx=6)
         ttk.Label(
@@ -418,6 +648,7 @@ class BatchApp(tk.Tk):
         self.log_text = scrolledtext.ScrolledText(log_frame, height=7, wrap=tk.WORD, relief=tk.FLAT, borderwidth=0, font=("Microsoft YaHei", 10))
         self.log_text.pack(fill=tk.BOTH, expand=True)
         self._update_model_summary()
+        self._update_template_preview()
         if self.verbose_var.get():
             self._log("✅ 系统就绪。详细日志已启用，将显示完整的处理过程。")
             self._log("💡 提示：勾选「详细日志」可查看串行处理流程，包括每张图片的LLM调用和结果返回状态。")
