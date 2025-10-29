@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
+from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog
 
 try:
     from PIL import Image, ImageTk  # type: ignore
@@ -94,9 +94,27 @@ except Exception:
 
 APP_TITLE = "AI 图片“图意”命名器（批量GUI，串行调度）"
 PROFILES_PATH = TOOL_DIR / "ai_image_intent_namer_gui.profiles.json"
+TEMPLATE_PRESETS_PATH = TOOL_DIR / "ai_image_intent_namer_gui.templates.json"
 DEFAULT_NAME_TEMPLATE = "{title}_{index:02d}_{intent}"
 DEFAULT_ATTACH_DIR = "attachments"
 PLAN_HISTORY_FILENAME = ".image_plan.history.log"
+
+DEFAULT_TEMPLATE_PRESET_NAME = "标题_全局序号_图意"
+CUSTOM_TEMPLATE_NAME = "自定义"
+DEFAULT_TEMPLATE_PRESETS: Dict[str, Dict[str, str]] = {
+    DEFAULT_TEMPLATE_PRESET_NAME: {
+        "template": "{title}_{index:02d}_{intent}",
+        "description": "标题_全局序号_图意",
+    },
+    "标题_段内序号_图意": {
+        "template": "{title}_{block:02d}-{idx:02d}_{intent}",
+        "description": "标题_段落序号-段内序号_图意",
+    },
+    "三位序号_图意": {
+        "template": "{index:03d}_{intent}",
+        "description": "三位全局序号_图意",
+    },
+}
 
 DEFAULT_UI_LANGUAGE = "zh"
 DEFAULT_INTENT_LANGUAGE = "auto"
@@ -209,6 +227,11 @@ class BatchApp(tk.Tk):
         self._template_helper_tree: Optional[ttk.Treeview] = None
         self._template_preview_var = tk.StringVar(value="")
         self.template_entry: Optional[ttk.Entry] = None
+        self.template_combo: Optional[ttk.Combobox] = None
+        self.template_preset_var = tk.StringVar(value=DEFAULT_TEMPLATE_PRESET_NAME)
+        self.template_desc_var = tk.StringVar(value="")
+        self.template_presets: Dict[str, Dict[str, str]] = {}
+        self._template_listbox: Optional[tk.Listbox] = None
         self._init_styles()
         self.title(APP_TITLE)
         self.geometry("1100x720")
@@ -220,6 +243,7 @@ class BatchApp(tk.Tk):
         self.profiles: Dict[str, Dict] = {}
         self._add_todo_item("界面语言切换支持完整英文化（待实现）")
 
+        self._load_template_presets()
         self._build_widgets()
         self._load_profiles()
 
@@ -447,6 +471,162 @@ class BatchApp(tk.Tk):
             preview = f"(生成预览失败: {exc})"
         self._template_preview_var.set(preview.strip())
 
+
+    def _template_description(self, name: str) -> str:
+        if not name or name == CUSTOM_TEMPLATE_NAME:
+            return "当前模板未保存"
+        info = self.template_presets.get(name)
+        if isinstance(info, dict):
+            desc = str(info.get("description", "") or "").strip()
+            if desc:
+                return desc
+        return "当前模板未保存"
+
+    def _match_template_to_preset(self) -> None:
+        current = (self.template_var.get() or "").strip()
+        matched = None
+        for preset_name, info in self.template_presets.items():
+            template = str(info.get("template", "") or "").strip()
+            if current == template:
+                matched = preset_name
+                break
+        if matched:
+            self.template_preset_var.set(matched)
+            self.template_desc_var.set(self._template_description(matched))
+        else:
+            self.template_preset_var.set(CUSTOM_TEMPLATE_NAME)
+            self.template_desc_var.set(self._template_description(CUSTOM_TEMPLATE_NAME))
+
+    def _refresh_template_presets_ui(self, select: Optional[str] = None, apply_template: bool = False) -> None:
+        if not self.template_combo:
+            return
+        names = sorted(self.template_presets.keys())
+        values = [CUSTOM_TEMPLATE_NAME] + names
+        self.template_combo.configure(values=values)
+        if select is None:
+            self._match_template_to_preset()
+        else:
+            target = select if select in values else CUSTOM_TEMPLATE_NAME
+            self.template_preset_var.set(target)
+            if apply_template and target != CUSTOM_TEMPLATE_NAME:
+                info = self.template_presets.get(target)
+                if isinstance(info, dict):
+                    template = str(info.get("template", "") or "")
+                    if template:
+                        self.template_var.set(template)
+            self.template_desc_var.set(self._template_description(target))
+        self.after(10, self._ensure_template_listbox_binding)
+
+    def _ensure_template_listbox_binding(self) -> None:
+        if not self.template_combo:
+            return
+        try:
+            popdown = self.template_combo.tk.call("ttk::combobox::PopdownWindow", str(self.template_combo))
+            listbox = self.nametowidget(f"{popdown}.f.l")
+        except Exception:
+            return
+        if getattr(self, "_template_listbox", None) is listbox:
+            return
+        self._template_listbox = listbox  # type: ignore[assignment]
+        try:
+            listbox.bind("<Motion>", self._on_template_list_motion, add="")
+            listbox.bind("<Leave>", self._on_template_list_leave, add="")
+            listbox.bind("<<ListboxSelect>>", self._on_template_list_select, add="")
+        except Exception:
+            pass
+
+    def _on_template_list_motion(self, event: tk.Event) -> None:
+        widget = getattr(event, "widget", None)
+        if not isinstance(widget, tk.Listbox):
+            return
+        try:
+            index = widget.nearest(event.y)
+            if index < 0:
+                return
+            name = widget.get(index)
+        except Exception:
+            return
+        self.template_desc_var.set(self._template_description(str(name)))
+
+    def _on_template_list_select(self, event: tk.Event) -> None:
+        widget = getattr(event, "widget", None)
+        if not isinstance(widget, tk.Listbox):
+            return
+        try:
+            selection = widget.curselection()
+            if not selection:
+                return
+            name = widget.get(selection[0])
+        except Exception:
+            return
+        self.template_desc_var.set(self._template_description(str(name)))
+
+    def _on_template_list_leave(self, _event: tk.Event) -> None:
+        current = self.template_preset_var.get()
+        self.template_desc_var.set(self._template_description(current))
+
+    def _on_template_preset_selected(self, _event: Optional[tk.Event] = None) -> None:
+        name = self.template_preset_var.get()
+        if name == CUSTOM_TEMPLATE_NAME:
+            self.template_desc_var.set(self._template_description(name))
+            return
+        info = self.template_presets.get(name)
+        if not isinstance(info, dict):
+            self.template_desc_var.set(self._template_description(name))
+            return
+        template = str(info.get("template", "") or "")
+        if template:
+            self.template_var.set(template)
+        self.template_desc_var.set(self._template_description(name))
+
+    def _on_template_preset_save(self) -> None:
+        template = (self.template_var.get() or "").strip()
+        if not template:
+            messagebox.showinfo("提示", "请先填写命名模板。")
+            return
+        initial_name = self.template_preset_var.get()
+        if initial_name == CUSTOM_TEMPLATE_NAME:
+            initial_name = ""
+        name = simpledialog.askstring("保存命名模板", "模板名称：", initialvalue=initial_name or "")
+        if not name:
+            return
+        name = name.strip()
+        if not name:
+            messagebox.showinfo("提示", "模板名称不能为空。")
+            return
+        existing_desc = self.template_presets.get(name, {}).get("description", "")
+        if not existing_desc:
+            existing_desc = self.template_desc_var.get() if self.template_preset_var.get() == name else ""
+        desc = simpledialog.askstring("模板说明", "为模板写一个简单说明：", initialvalue=existing_desc or "")
+        if desc is None:
+            desc = ""
+        self.template_presets[name] = {
+            "template": template,
+            "description": (desc or "").strip(),
+        }
+        self._save_template_presets()
+        self._refresh_template_presets_ui(select=name)
+        messagebox.showinfo("提示", f"已保存模板“{name}”。")
+
+    def _on_template_preset_delete(self) -> None:
+        name = (self.template_preset_var.get() or "").strip()
+        if not name or name == CUSTOM_TEMPLATE_NAME:
+            messagebox.showinfo("提示", "请先选择要删除的模板。")
+            return
+        if name in DEFAULT_TEMPLATE_PRESETS:
+            messagebox.showinfo("提示", "内置模板不可删除。")
+            return
+        if not messagebox.askyesno("确认删除", f"确定要删除模板“{name}”吗？"):
+            return
+        if name in self.template_presets:
+            del self.template_presets[name]
+            self._save_template_presets()
+        self._refresh_template_presets_ui(select=CUSTOM_TEMPLATE_NAME)
+
+    def _on_template_value_changed(self, *_args: object) -> None:
+        self._match_template_to_preset()
+        self._on_name_rule_changed()
+
     def _on_name_rule_changed(self, *_args: object) -> None:
         self._recalc_all_tabs()
         self._update_template_preview()
@@ -579,9 +759,21 @@ class BatchApp(tk.Tk):
         template_frame = ttk.Frame(ai)
         template_frame.grid(row=2, column=3, sticky="we", padx=(0, 6))
         template_frame.columnconfigure(0, weight=1)
+        template_frame.columnconfigure(1, weight=1)
+        self.template_combo = ttk.Combobox(template_frame, textvariable=self.template_preset_var, values=[], state="readonly", width=18)
+        self.template_combo.grid(row=0, column=0, sticky="we")
+        self.template_combo.bind("<<ComboboxSelected>>", self._on_template_preset_selected)
+        self.template_combo.bind("<ButtonPress-1>", lambda _e: self.after(10, self._ensure_template_listbox_binding))
+        self.template_combo.bind("<KeyPress-Down>", lambda _e: self.after(10, self._ensure_template_listbox_binding))
+        self.template_combo.bind("<KeyPress-Up>", lambda _e: self.after(10, self._ensure_template_listbox_binding))
+        ttk.Label(template_frame, textvariable=self.template_desc_var, foreground="#555555", anchor="w").grid(row=0, column=1, sticky="we", padx=(6, 0))
+        btn_frame = ttk.Frame(template_frame)
+        btn_frame.grid(row=0, column=2, rowspan=2, sticky="ns", padx=(6, 0))
+        ttk.Button(btn_frame, text="保存模板", command=self._on_template_preset_save).pack(fill=tk.X)
+        ttk.Button(btn_frame, text="删除模板", command=self._on_template_preset_delete).pack(fill=tk.X, pady=(4, 0))
+        ttk.Button(btn_frame, text="模板向导", command=self._open_template_helper).pack(fill=tk.X, pady=(4, 0))
         self.template_entry = ttk.Entry(template_frame, textvariable=self.template_var)
-        self.template_entry.grid(row=0, column=0, sticky="we")
-        ttk.Button(template_frame, text="模板向导", command=self._open_template_helper).grid(row=0, column=1, padx=(6, 0))
+        self.template_entry.grid(row=1, column=0, columnspan=2, sticky="we", pady=(6, 0))
 
         ttk.Label(ai, text="序号宽度:").grid(row=2, column=4, sticky="w", padx=(8, 4))
         self.seq_width_var = tk.IntVar(value=2)
@@ -612,7 +804,7 @@ class BatchApp(tk.Tk):
         self.attach_var = tk.StringVar(value=DEFAULT_ATTACH_DIR)
         self.max_len_var = tk.IntVar(value=80)
         self.normalize_html_var = tk.BooleanVar(value=True)
-        self.template_var.trace_add("write", self._on_name_rule_changed)
+        self.template_var.trace_add("write", self._on_template_value_changed)
         self.seq_width_var.trace_add("write", self._on_name_rule_changed)
         self.max_len_var.trace_add("write", self._on_name_rule_changed)
 
@@ -648,6 +840,7 @@ class BatchApp(tk.Tk):
         log_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=False, padx=20, pady=(0, 16))
         self.log_text = scrolledtext.ScrolledText(log_frame, height=7, wrap=tk.WORD, relief=tk.FLAT, borderwidth=0, font=("Microsoft YaHei", 10))
         self.log_text.pack(fill=tk.BOTH, expand=True)
+        self._refresh_template_presets_ui()
         self._update_model_summary()
         self._update_template_preview()
         if self.verbose_var.get():
@@ -831,7 +1024,50 @@ class BatchApp(tk.Tk):
         dlg.wait_window()
 
     # ------------------------------------------------------------------ #
-    # 配置档
+    # 命名模板预设
+    # ------------------------------------------------------------------ #
+    def _templates_path(self) -> Path:
+        return TEMPLATE_PRESETS_PATH
+
+    def _load_template_presets(self) -> None:
+        self.template_presets = {}
+        try:
+            p = self._templates_path()
+            if p.exists():
+                data = json.load(p.open("r", encoding="utf-8"))
+                if isinstance(data, dict):
+                    for name, info in data.items():
+                        if not isinstance(name, str) or not isinstance(info, dict):
+                            continue
+                        template = str(info.get("template", "")).strip()
+                        if not template:
+                            continue
+                        desc = str(info.get("description", "")).strip()
+                        self.template_presets[name] = {"template": template, "description": desc}
+        except Exception:
+            self.template_presets = {}
+        self._ensure_default_template_presets()
+
+    def _save_template_presets(self, silent: bool = False) -> None:
+        try:
+            p = self._templates_path()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            json.dump(self.template_presets, p.open("w", encoding="utf-8"), ensure_ascii=False, indent=2)
+        except Exception as exc:
+            if not silent:
+                messagebox.showerror("错误", f"保存命名模板失败: {exc}")
+
+    def _ensure_default_template_presets(self) -> None:
+        changed = False
+        for name, info in DEFAULT_TEMPLATE_PRESETS.items():
+            if name not in self.template_presets:
+                self.template_presets[name] = dict(info)
+                changed = True
+        if changed:
+            self._save_template_presets(silent=True)
+
+    # ------------------------------------------------------------------ #
+    # 常用配置
     # ------------------------------------------------------------------ #
     def _profiles_path(self) -> Path:
         return PROFILES_PATH
