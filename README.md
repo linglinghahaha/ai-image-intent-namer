@@ -4,6 +4,31 @@ AI 图片“图意”命名器是一款面向 Markdown 图文的 LLM 命名/搬�
 
 本发行包提供 Markdown 图片命名/搬运的一体化工具集，包含批量 GUI、命令行核心脚本以及可选的图片本地化辅助脚本。V1 新增“翻译 / 归纳”上下文助手；v1.1.0 聚焦四项升级：语言可控、图意导入、SCI 论文图片策略、粘贴大段语境后再生成。
 
+## 当前状态与 TODO
+
+- 兼容性与平台
+   - 已在 SiliconFlow 平台验证；将陆续测试 OpenRouter、OpenAI、DeepSeek、Qwen、Azure OpenAI 等兼容性。
+- 界面语言切换（未完成）
+   - UI 语言切换入口已预留，仍需完成全量 i18n 文案与布局适配（zh/en）。
+- 图片云端直传（计划）
+   - 重命名后的图片支持直接上传至云存储（S3/OSS/COS 等），并自动回写 Markdown 链接；可选 CDN 前缀。
+- 并发与速率控制（计划）
+   - 批量处理支持并发队列、速率限制、指数退避重试；可配置最大并发与每分钟请求数。
+- 缓存与可重跑（计划）
+   - 以“上下文哈希 + 模型 + Prompt”为键缓存 LLM 响应；支持断点续跑、只处理新增/变更图片。
+- 模板预览与校验（计划）
+   - 所见即所得的模板编辑器，实时预览与占位符校验，提供多语言 slug 化选项。
+- SCI 策略增强（计划）
+   - 可配置 Figure/Table 的结构化模板，支持自动编号与文中引用一致性检查。
+- 导入/导出与报告（计划）
+   - 支持 CSV/JSON 批量导入“图意”，导出评审报告；可从 alt/title 批量导入初始图意。
+- 配置档与密钥管理（计划）
+   - 多配置档切换、加密存储 API Key、可选云端同步；更细粒度地为翻译/归纳/命名指定不同模型。
+- 日志与诊断（计划）
+   - 统一日志级别、问题定位信息与一键诊断包导出，便于反馈问题。
+- 自动化发布（计划）
+   - 推送标签自动创建 Release 与打包附件（GitHub Actions）。
+
 ## v1 ➜ v1.1.0 这次新增了什么
 
 - 语言可控（UI 与输出）
@@ -24,17 +49,17 @@ release_bundle/
 ├─ README.md                  当前说明
 ├─ requirements.txt           依赖列表
 └─ tool/
-   ├─ ai_image_intent_namer.py          核心 CLI / 业务逻辑
-   ├─ ai_image_intent_namer_batch_gui.py 批量 GUI（推荐入口）
-   ├─ ai_image_intent_namer_gui.py       旧版 GUI（可选）
-   └─ md_image_localizer.py              可选：Markdown 图片本地化脚本
+   ├─ ai_image_intent_namer.py           核心 CLI / 业务逻辑
+   ├─ ai_image_intent_namer_batch_gui.py  批量 GUI（推荐入口）
+   ├─ ai_image_intent_namer_gui.py        旧版 GUI（可选）
+   └─ md_image_localizer.py               图片本地化脚本（可选）
 ```
 
 ## 运行环境
 
 - Python 3.9 及以上
 - Tkinter（Python 自带，如为精简发行版需单独安装）
-- 依赖：`requests`, `pillow`
+- 依赖：`pillow`
 
 安装依赖：
 
@@ -60,17 +85,16 @@ pip install -r requirements.txt
 
 ## v1.1.0 更新亮点（摘要）
 
-- 语言：界面语言切换（中/英）；图意输出语言（自动/中文/英文）。
-- 图意导入：支持把你已有的图意文本作为起点，便于统一风格与批量复用。
-- SCI 策略：新增面向论文图片的命名策略，突出 caption 要点。
-- 语境增强：支持粘贴较长相关内容后再生成，更贴合原文上下文。
-- 其他：清理无关产物，微调依赖与文档。
+- 语言：图意输出语言（自动/中文/英文）；界面语言切换入口已预留。
+- 图意导入：单图审核可粘贴你的“图意”文本作为种子，由模型在此基础上优化并适配模板。
+- SCI 策略：新增面向论文图片的命名策略，突出 caption 要点（变量/方法/实验核心）。
+- 语境增强：在单图审核中可粘贴较长相关内容后再生成，更贴合原文上下文。
 
 ## v1.0.0（V1）版本亮点
 
-- **翻译 / 归纳助手**：在单图审核对话框顶部新增两个按钮，支持独立的 Base URL / API Key / 模型 / Prompt 配置，返回结果直接展示在弹窗中。
-- **兼容多厂商输出**：`call_openai_chat` 新增 `expect_json` 开关与 `flatten_text` 处理，完美兼容 SiliconFlow 等返回 `output_text` 数组的模型，避免翻译结果为空。
-- **稳定性回归**：核心脚本恢复为干净的 UTF-8 源文件，所有 GUI 调用均已验证可用。
+- 翻译 / 归纳助手：在单图审核对话框新增“翻译 / 归纳”按钮，支持独立的 Base URL / API Key / 模型 / Prompt 配置。
+- 兼容多厂商输出：`call_openai_chat` 支持 `expect_json` 与 `flatten_text` 处理，兼容返回 `output_text` 数组的模型。
+- 稳定性回归：核心脚本恢复为干净的 UTF-8 源文件，GUI 调用链经回归验证。
 
 ## 交付物
 
