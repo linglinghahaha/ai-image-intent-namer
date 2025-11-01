@@ -208,3 +208,8 @@ __marimo__/
 
 # Local AI GUI profiles (contains API keys)
 tool/ai_image_intent_namer_gui.profiles.json
+
+# Project-specific ignores
+.vscode/
+diff_temp.txt
+original_*.py
