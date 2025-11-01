@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
+from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog
 
 try:
     from PIL import Image, ImageTk  # type: ignore
@@ -94,9 +94,27 @@ except Exception:
 
 APP_TITLE = "AI 图片“图意”命名器（批量GUI，串行调度）"
 PROFILES_PATH = TOOL_DIR / "ai_image_intent_namer_gui.profiles.json"
+TEMPLATE_PRESETS_PATH = TOOL_DIR / "ai_image_intent_namer_gui.templates.json"
 DEFAULT_NAME_TEMPLATE = "{title}_{index:02d}_{intent}"
 DEFAULT_ATTACH_DIR = "attachments"
 PLAN_HISTORY_FILENAME = ".image_plan.history.log"
+
+DEFAULT_TEMPLATE_PRESET_NAME = "标题_全局序号_图意"
+CUSTOM_TEMPLATE_NAME = "自定义"
+DEFAULT_TEMPLATE_PRESETS: Dict[str, Dict[str, str]] = {
+    DEFAULT_TEMPLATE_PRESET_NAME: {
+        "template": "{title}_{index:02d}_{intent}",
+        "description": "标题_全局序号_图意",
+    },
+    "标题_段内序号_图意": {
+        "template": "{title}_{block:02d}-{idx:02d}_{intent}",
+        "description": "标题_段落序号-段内序号_图意",
+    },
+    "三位序号_图意": {
+        "template": "{index:03d}_{intent}",
+        "description": "三位全局序号_图意",
+    },
+}
 
 DEFAULT_UI_LANGUAGE = "zh"
 DEFAULT_INTENT_LANGUAGE = "auto"
@@ -209,6 +227,11 @@ class BatchApp(tk.Tk):
         self._template_helper_tree: Optional[ttk.Treeview] = None
         self._template_preview_var = tk.StringVar(value="")
         self.template_entry: Optional[ttk.Entry] = None
+        self.template_combo: Optional[ttk.Combobox] = None
+        self.template_preset_var = tk.StringVar(value=DEFAULT_TEMPLATE_PRESET_NAME)
+        self.template_desc_var = tk.StringVar(value="")
+        self.template_presets: Dict[str, Dict[str, str]] = {}
+        self._template_listbox: Optional[tk.Listbox] = None
         self._init_styles()
         self.title(APP_TITLE)
         self.geometry("1100x720")
@@ -220,6 +243,7 @@ class BatchApp(tk.Tk):
         self.profiles: Dict[str, Dict] = {}
         self._add_todo_item("界面语言切换支持完整英文化（待实现）")
 
+        self._load_template_presets()
         self._build_widgets()
         self._load_profiles()
 
@@ -447,6 +471,162 @@ class BatchApp(tk.Tk):
             preview = f"(生成预览失败: {exc})"
         self._template_preview_var.set(preview.strip())
 
+
+    def _template_description(self, name: str) -> str:
+        if not name or name == CUSTOM_TEMPLATE_NAME:
+            return "当前模板未保存"
+        info = self.template_presets.get(name)
+        if isinstance(info, dict):
+            desc = str(info.get("description", "") or "").strip()
+            if desc:
+                return desc
+        return "当前模板未保存"
+
+    def _match_template_to_preset(self) -> None:
+        current = (self.template_var.get() or "").strip()
+        matched = None
+        for preset_name, info in self.template_presets.items():
+            template = str(info.get("template", "") or "").strip()
+            if current == template:
+                matched = preset_name
+                break
+        if matched:
+            self.template_preset_var.set(matched)
+            self.template_desc_var.set(self._template_description(matched))
+        else:
+            self.template_preset_var.set(CUSTOM_TEMPLATE_NAME)
+            self.template_desc_var.set(self._template_description(CUSTOM_TEMPLATE_NAME))
+
+    def _refresh_template_presets_ui(self, select: Optional[str] = None, apply_template: bool = False) -> None:
+        if not self.template_combo:
+            return
+        names = sorted(self.template_presets.keys())
+        values = [CUSTOM_TEMPLATE_NAME] + names
+        self.template_combo.configure(values=values)
+        if select is None:
+            self._match_template_to_preset()
+        else:
+            target = select if select in values else CUSTOM_TEMPLATE_NAME
+            self.template_preset_var.set(target)
+            if apply_template and target != CUSTOM_TEMPLATE_NAME:
+                info = self.template_presets.get(target)
+                if isinstance(info, dict):
+                    template = str(info.get("template", "") or "")
+                    if template:
+                        self.template_var.set(template)
+            self.template_desc_var.set(self._template_description(target))
+        self.after(10, self._ensure_template_listbox_binding)
+
+    def _ensure_template_listbox_binding(self) -> None:
+        if not self.template_combo:
+            return
+        try:
+            popdown = self.template_combo.tk.call("ttk::combobox::PopdownWindow", str(self.template_combo))
+            listbox = self.nametowidget(f"{popdown}.f.l")
+        except Exception:
+            return
+        if getattr(self, "_template_listbox", None) is listbox:
+            return
+        self._template_listbox = listbox  # type: ignore[assignment]
+        try:
+            listbox.bind("<Motion>", self._on_template_list_motion, add="")
+            listbox.bind("<Leave>", self._on_template_list_leave, add="")
+            listbox.bind("<<ListboxSelect>>", self._on_template_list_select, add="")
+        except Exception:
+            pass
+
+    def _on_template_list_motion(self, event: tk.Event) -> None:
+        widget = getattr(event, "widget", None)
+        if not isinstance(widget, tk.Listbox):
+            return
+        try:
+            index = widget.nearest(event.y)
+            if index < 0:
+                return
+            name = widget.get(index)
+        except Exception:
+            return
+        self.template_desc_var.set(self._template_description(str(name)))
+
+    def _on_template_list_select(self, event: tk.Event) -> None:
+        widget = getattr(event, "widget", None)
+        if not isinstance(widget, tk.Listbox):
+            return
+        try:
+            selection = widget.curselection()
+            if not selection:
+                return
+            name = widget.get(selection[0])
+        except Exception:
+            return
+        self.template_desc_var.set(self._template_description(str(name)))
+
+    def _on_template_list_leave(self, _event: tk.Event) -> None:
+        current = self.template_preset_var.get()
+        self.template_desc_var.set(self._template_description(current))
+
+    def _on_template_preset_selected(self, _event: Optional[tk.Event] = None) -> None:
+        name = self.template_preset_var.get()
+        if name == CUSTOM_TEMPLATE_NAME:
+            self.template_desc_var.set(self._template_description(name))
+            return
+        info = self.template_presets.get(name)
+        if not isinstance(info, dict):
+            self.template_desc_var.set(self._template_description(name))
+            return
+        template = str(info.get("template", "") or "")
+        if template:
+            self.template_var.set(template)
+        self.template_desc_var.set(self._template_description(name))
+
+    def _on_template_preset_save(self) -> None:
+        template = (self.template_var.get() or "").strip()
+        if not template:
+            messagebox.showinfo("提示", "请先填写命名模板。")
+            return
+        initial_name = self.template_preset_var.get()
+        if initial_name == CUSTOM_TEMPLATE_NAME:
+            initial_name = ""
+        name = simpledialog.askstring("保存命名模板", "模板名称：", initialvalue=initial_name or "")
+        if not name:
+            return
+        name = name.strip()
+        if not name:
+            messagebox.showinfo("提示", "模板名称不能为空。")
+            return
+        existing_desc = self.template_presets.get(name, {}).get("description", "")
+        if not existing_desc:
+            existing_desc = self.template_desc_var.get() if self.template_preset_var.get() == name else ""
+        desc = simpledialog.askstring("模板说明", "为模板写一个简单说明：", initialvalue=existing_desc or "")
+        if desc is None:
+            desc = ""
+        self.template_presets[name] = {
+            "template": template,
+            "description": (desc or "").strip(),
+        }
+        self._save_template_presets()
+        self._refresh_template_presets_ui(select=name)
+        messagebox.showinfo("提示", f"已保存模板“{name}”。")
+
+    def _on_template_preset_delete(self) -> None:
+        name = (self.template_preset_var.get() or "").strip()
+        if not name or name == CUSTOM_TEMPLATE_NAME:
+            messagebox.showinfo("提示", "请先选择要删除的模板。")
+            return
+        if name in DEFAULT_TEMPLATE_PRESETS:
+            messagebox.showinfo("提示", "内置模板不可删除。")
+            return
+        if not messagebox.askyesno("确认删除", f"确定要删除模板“{name}”吗？"):
+            return
+        if name in self.template_presets:
+            del self.template_presets[name]
+            self._save_template_presets()
+        self._refresh_template_presets_ui(select=CUSTOM_TEMPLATE_NAME)
+
+    def _on_template_value_changed(self, *_args: object) -> None:
+        self._match_template_to_preset()
+        self._on_name_rule_changed()
+
     def _on_name_rule_changed(self, *_args: object) -> None:
         self._recalc_all_tabs()
         self._update_template_preview()
@@ -572,16 +752,28 @@ class BatchApp(tk.Tk):
         # 第二行：策略和模板
         ttk.Label(ai, text="策略:").grid(row=2, column=0, sticky="w", padx=(8, 4))
         self.strategy_var = tk.StringVar(value="above")
-        ttk.Combobox(ai, textvariable=self.strategy_var, values=["seq", "above", "below", "between", "intent", "hybrid"], width=12, state="readonly").grid(row=2, column=1, sticky="we", padx=(0, 6))
+        ttk.Combobox(ai, textvariable=self.strategy_var, values=["seq", "above", "below", "between", "intent", "hybrid", "sci"], width=12, state="readonly").grid(row=2, column=1, sticky="we", padx=(0, 6))
 
         ttk.Label(ai, text="命名模板:").grid(row=2, column=2, sticky="w", padx=(8, 4))
         self.template_var = tk.StringVar(value=DEFAULT_NAME_TEMPLATE)
         template_frame = ttk.Frame(ai)
         template_frame.grid(row=2, column=3, sticky="we", padx=(0, 6))
         template_frame.columnconfigure(0, weight=1)
+        template_frame.columnconfigure(1, weight=1)
+        self.template_combo = ttk.Combobox(template_frame, textvariable=self.template_preset_var, values=[], state="readonly", width=18)
+        self.template_combo.grid(row=0, column=0, sticky="we")
+        self.template_combo.bind("<<ComboboxSelected>>", self._on_template_preset_selected)
+        self.template_combo.bind("<ButtonPress-1>", lambda _e: self.after(10, self._ensure_template_listbox_binding))
+        self.template_combo.bind("<KeyPress-Down>", lambda _e: self.after(10, self._ensure_template_listbox_binding))
+        self.template_combo.bind("<KeyPress-Up>", lambda _e: self.after(10, self._ensure_template_listbox_binding))
+        ttk.Label(template_frame, textvariable=self.template_desc_var, foreground="#555555", anchor="w").grid(row=0, column=1, sticky="we", padx=(6, 0))
+        btn_frame = ttk.Frame(template_frame)
+        btn_frame.grid(row=0, column=2, rowspan=2, sticky="ns", padx=(6, 0))
+        ttk.Button(btn_frame, text="保存模板", command=self._on_template_preset_save).pack(fill=tk.X)
+        ttk.Button(btn_frame, text="删除模板", command=self._on_template_preset_delete).pack(fill=tk.X, pady=(4, 0))
+        ttk.Button(btn_frame, text="模板向导", command=self._open_template_helper).pack(fill=tk.X, pady=(4, 0))
         self.template_entry = ttk.Entry(template_frame, textvariable=self.template_var)
-        self.template_entry.grid(row=0, column=0, sticky="we")
-        ttk.Button(template_frame, text="模板向导", command=self._open_template_helper).grid(row=0, column=1, padx=(6, 0))
+        self.template_entry.grid(row=1, column=0, columnspan=2, sticky="we", pady=(6, 0))
 
         ttk.Label(ai, text="序号宽度:").grid(row=2, column=4, sticky="w", padx=(8, 4))
         self.seq_width_var = tk.IntVar(value=2)
@@ -612,7 +804,7 @@ class BatchApp(tk.Tk):
         self.attach_var = tk.StringVar(value=DEFAULT_ATTACH_DIR)
         self.max_len_var = tk.IntVar(value=80)
         self.normalize_html_var = tk.BooleanVar(value=True)
-        self.template_var.trace_add("write", self._on_name_rule_changed)
+        self.template_var.trace_add("write", self._on_template_value_changed)
         self.seq_width_var.trace_add("write", self._on_name_rule_changed)
         self.max_len_var.trace_add("write", self._on_name_rule_changed)
 
@@ -632,6 +824,7 @@ class BatchApp(tk.Tk):
         ttk.Button(actions, text="批量预览（串行）", style="Accent.TButton", command=self._on_batch_preview).pack(side=tk.LEFT, padx=6)
         ttk.Button(actions, text="查找/替换", command=self._open_find_replace_dialog).pack(side=tk.LEFT, padx=6)
         ttk.Button(actions, text="待办事项", command=self._open_todo_list).pack(side=tk.LEFT, padx=6)
+        ttk.Button(actions, text="导入图意...", command=self._on_import_intents).pack(side=tk.LEFT, padx=6)
         ttk.Button(actions, text="停止", command=self._on_stop).pack(side=tk.LEFT, padx=6)
         ttk.Button(actions, text="退出", command=self.destroy).pack(side=tk.RIGHT, padx=6)
         ttk.Label(
@@ -647,6 +840,7 @@ class BatchApp(tk.Tk):
         log_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=False, padx=20, pady=(0, 16))
         self.log_text = scrolledtext.ScrolledText(log_frame, height=7, wrap=tk.WORD, relief=tk.FLAT, borderwidth=0, font=("Microsoft YaHei", 10))
         self.log_text.pack(fill=tk.BOTH, expand=True)
+        self._refresh_template_presets_ui()
         self._update_model_summary()
         self._update_template_preview()
         if self.verbose_var.get():
@@ -830,7 +1024,50 @@ class BatchApp(tk.Tk):
         dlg.wait_window()
 
     # ------------------------------------------------------------------ #
-    # 配置档
+    # 命名模板预设
+    # ------------------------------------------------------------------ #
+    def _templates_path(self) -> Path:
+        return TEMPLATE_PRESETS_PATH
+
+    def _load_template_presets(self) -> None:
+        self.template_presets = {}
+        try:
+            p = self._templates_path()
+            if p.exists():
+                data = json.load(p.open("r", encoding="utf-8"))
+                if isinstance(data, dict):
+                    for name, info in data.items():
+                        if not isinstance(name, str) or not isinstance(info, dict):
+                            continue
+                        template = str(info.get("template", "")).strip()
+                        if not template:
+                            continue
+                        desc = str(info.get("description", "")).strip()
+                        self.template_presets[name] = {"template": template, "description": desc}
+        except Exception:
+            self.template_presets = {}
+        self._ensure_default_template_presets()
+
+    def _save_template_presets(self, silent: bool = False) -> None:
+        try:
+            p = self._templates_path()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            json.dump(self.template_presets, p.open("w", encoding="utf-8"), ensure_ascii=False, indent=2)
+        except Exception as exc:
+            if not silent:
+                messagebox.showerror("错误", f"保存命名模板失败: {exc}")
+
+    def _ensure_default_template_presets(self) -> None:
+        changed = False
+        for name, info in DEFAULT_TEMPLATE_PRESETS.items():
+            if name not in self.template_presets:
+                self.template_presets[name] = dict(info)
+                changed = True
+        if changed:
+            self._save_template_presets(silent=True)
+
+    # ------------------------------------------------------------------ #
+    # 常用配置
     # ------------------------------------------------------------------ #
     def _profiles_path(self) -> Path:
         return PROFILES_PATH
@@ -1212,6 +1449,70 @@ class BatchApp(tk.Tk):
 
     def _on_stop(self) -> None:
         self.stop_flag = True
+
+    def _on_import_intents(self) -> None:
+        tab = self._current_tab()
+        if not tab or not tab.item_uis:
+            messagebox.showinfo("提示", "请先载入并选择一个包含图片的文档。", parent=self)
+            return
+
+        choice = messagebox.askyesnocancel(
+            "导入图意",
+            "请选择导入方式：\n是：从 TXT 文件加载\n否：从剪贴板读取\n取消：放弃导入",
+            parent=self,
+        )
+        if choice is None:
+            return
+
+        lines: List[str] = []
+        if choice:
+            path = filedialog.askopenfilename(
+                title="选择包含图意的文本文件",
+                filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")],
+            )
+            if not path:
+                return
+            try:
+                text = Path(path).read_text(encoding="utf-8")
+            except Exception as exc:
+                messagebox.showerror("错误", f"读取文件失败：{exc}", parent=self)
+                return
+            lines = text.splitlines()
+        else:
+            try:
+                clipboard_text = self.clipboard_get()
+            except Exception as exc:
+                messagebox.showerror("错误", f"无法从剪贴板读取数据：{exc}", parent=self)
+                return
+            lines = clipboard_text.splitlines()
+
+        if not lines:
+            messagebox.showinfo("提示", "未检测到任何可导入的内容。", parent=self)
+            return
+
+        applied = 0
+        total_items = len(tab.item_uis)
+        for idx, item in enumerate(tab.item_uis):
+            if idx >= len(lines):
+                break
+            raw = lines[idx].strip()
+            if not raw:
+                continue
+            sanitized = sanitize_filename(raw)
+            if not sanitized:
+                continue
+            item.intent_var.set(sanitized)
+            applied += 1
+
+        self._recalc_names(tab)
+
+        extra = len(lines) - total_items
+        note_parts = [f"成功应用 {applied} 条图意。"]
+        if extra > 0:
+            note_parts.append(f"（还有 {extra} 条内容未使用，已忽略。）")
+        if applied == 0:
+            note_parts.append("请检查文本是否与图片数量匹配。")
+        messagebox.showinfo("导入完成", "".join(note_parts), parent=self)
         self._log("⏹️ 已请求停止（将在当前任务结束后生效）。")
 
     def _batch_preview_worker(self) -> None:
@@ -1993,14 +2294,13 @@ class BatchApp(tk.Tk):
         context_frame = ttk.LabelFrame(right_frame, text="上下文")
         context_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
 
-        # 上下文工具条（翻译 / 归纳）
-        tools_row = ttk.Frame(context_frame)
-        tools_row.pack(fill=tk.X, padx=6, pady=(6, 0))
-        ttk.Label(tools_row, text="操作：", foreground="#555").pack(side=tk.LEFT, padx=(0, 6))
-
-        def _open_text_proc_dialog(kind: str) -> None:
+        def _open_text_proc_dialog(kind: str, source_label: str, source_text: str) -> None:
+            text_body = (source_text or "").strip()
+            if not text_body:
+                messagebox.showinfo("提示", f"{source_label}暂无可处理的内容。", parent=dlg)
+                return
             dlg2 = tk.Toplevel(self)
-            dlg2.title("翻译结果" if kind == "translate" else "归纳结果")
+            dlg2.title(("翻译" if kind == "translate" else "归纳") + f" - {source_label}")
             dlg2.geometry("720x520")
             dlg2.transient(self)
             dlg2.grab_set()
@@ -2009,15 +2309,6 @@ class BatchApp(tk.Tk):
             out_box.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
             out_box.insert("1.0", "⏳ 正在处理，请稍候...")
             out_box.configure(state=tk.DISABLED)
-
-            above = (item.above_text or "").strip()
-            below = (item.below_text or "").strip()
-            parts: List[str] = []
-            if above:
-                parts.append(f"【上文】\n{above}")
-            if below:
-                parts.append(f"【下文】\n{below}")
-            user_text = "\n\n".join(parts) if parts else "（无上下文内容）"
 
             def worker() -> None:
                 try:
@@ -2032,6 +2323,10 @@ class BatchApp(tk.Tk):
                         model = (self.sum_model_var.get().strip() or self.model_var.get().strip())
                         sys_prompt = self.sum_prompt_var.get().strip()
 
+                    if not base or not key or not model:
+                        raise ValueError("缺少 Base URL / API Key / Model")
+
+                    user_text = f"{source_label}：\n{text_body}"
                     result = self._run_simple_chat(base, key, model, sys_prompt, user_text)
                     if not isinstance(result, str):
                         result = str(result)
@@ -2053,28 +2348,72 @@ class BatchApp(tk.Tk):
 
             threading.Thread(target=worker, daemon=True).start()
 
-        ttk.Button(tools_row, text="翻译", command=lambda: _open_text_proc_dialog("translate")).pack(side=tk.LEFT, padx=4)
-        ttk.Button(tools_row, text="归纳", command=lambda: _open_text_proc_dialog("summarize")).pack(side=tk.LEFT, padx=4)
+        all_items = tab.item_uis
+        below_values = [it.below_text for it in all_items]
+        formatted_below: List[str] = []
+        total_items = len(below_values)
+        for idx, raw in enumerate(below_values):
+            text_val = (raw or "").strip()
+            if text_val:
+                formatted_below.append(text_val)
+                continue
+            j = idx
+            while j < total_items and not (below_values[j] or "").strip():
+                j += 1
+            if j < total_items:
+                prefix = "".join(["(空)"] * (j - idx))
+                formatted_below.append(prefix + (below_values[j] or "").strip())
+            else:
+                prefix = "".join(["(空)"] * (total_items - idx))
+                formatted_below.append(prefix or "(空)")
+
+        current_below_display = (
+            formatted_below[item_pos] if 0 <= item_pos < len(formatted_below) else (item.below_text or "")
+        )
 
         contexts = [
             ("上文", item.above_text),
-            ("下文", item.below_text),
+            ("下文", current_below_display),
         ]
 
         for title, content in contexts:
             sub = ttk.LabelFrame(context_frame, text=title)
             sub.pack(fill=tk.BOTH, expand=True, padx=3, pady=3)
             sub.columnconfigure(0, weight=1)
-            sub.rowconfigure(0, weight=1)
+            sub.rowconfigure(1, weight=1)
+
+            header = ttk.Frame(sub)
+            header.grid(row=0, column=0, sticky="ew", padx=2, pady=(2, 0))
+            header.columnconfigure(0, weight=1)
+
             text_content = (content or "").strip()
             char_count = len(text_content)
+            info_text = f"字数：{char_count}" if char_count else "暂无内容"
+            ttk.Label(header, text=info_text, foreground="#666").grid(row=0, column=0, sticky="w")
+
+            btn_bar = ttk.Frame(header)
+            btn_bar.grid(row=0, column=1, sticky="e")
+            btn_state = tk.NORMAL if char_count else tk.DISABLED
+            ttk.Button(
+                btn_bar,
+                text="翻译",
+                state=btn_state,
+                command=lambda c=content, t=title: _open_text_proc_dialog("translate", t, c or ""),
+            ).pack(side=tk.LEFT, padx=(0, 4))
+            ttk.Button(
+                btn_bar,
+                text="归纳",
+                state=btn_state,
+                command=lambda c=content, t=title: _open_text_proc_dialog("summarize", t, c or ""),
+            ).pack(side=tk.LEFT)
+
             if char_count == 0:
                 height = CONTEXT_EMPTY_LINES
             else:
                 est_lines = (char_count + CONTEXT_CHAR_PER_LINE - 1) // CONTEXT_CHAR_PER_LINE
                 height = max(CONTEXT_MIN_LINES, min(CONTEXT_MAX_LINES, est_lines + 1))
             viewer = scrolledtext.ScrolledText(sub, height=height, wrap=tk.WORD, font=CONTEXT_FONT)
-            viewer.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+            viewer.grid(row=1, column=0, sticky="nsew", padx=2, pady=(2, 2))
             self._render_markdown(viewer, content or "")
 
         # 候选框架
@@ -2086,8 +2425,12 @@ class BatchApp(tk.Tk):
         selected_var = tk.StringVar(value=item.intent_var.get())
         custom_var = tk.StringVar(value=item.intent_var.get())
         status_var = tk.StringVar(value="")
+        custom_entry: Optional[ttk.Entry] = None
+        rewrite_btn: Optional[ttk.Button] = None
+        rewrite_in_progress = False
 
         def render_candidates(candidates: List[Dict], preferred: Optional[str] = None) -> None:
+            nonlocal custom_entry, rewrite_btn
             for child in cand_container.winfo_children():
                 child.destroy()
             sanitized: List[str] = []
@@ -2118,18 +2461,97 @@ class BatchApp(tk.Tk):
                 if reason:
                     ttk.Label(cand_container, text=f"依据：{reason}", wraplength=580, foreground="#666").pack(anchor="w", padx=24, pady=(0, 4))
             ttk.Radiobutton(cand_container, text="自定义：", value="__custom__", variable=selected_var).pack(anchor="w", pady=(6, 2))
-            entry = ttk.Entry(cand_container, textvariable=custom_var, width=60)
-            entry.pack(anchor="w", padx=24, pady=(0, 6))
-            entry.bind("<FocusIn>", lambda _evt: selected_var.set("__custom__"))
+            custom_row = ttk.Frame(cand_container)
+            custom_row.pack(anchor="w", fill=tk.X, padx=24, pady=(0, 6))
+            custom_entry = ttk.Entry(custom_row, textvariable=custom_var, width=52)
+            custom_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            custom_entry.bind("<FocusIn>", lambda _evt: selected_var.set("__custom__"))
+            rewrite_btn = ttk.Button(custom_row, text="生成")
+            rewrite_btn.pack(side=tk.LEFT, padx=(6, 0))
+            rewrite_btn.configure(command=lambda: rewrite_custom_intent())
             if preferred and preferred in sanitized:
                 selected_var.set(preferred)
             elif sanitized:
                 selected_var.set(sanitized[0])
             else:
                 selected_var.set("__custom__")
-                entry.focus_set()
+                custom_entry.focus_set()
+
+        def rewrite_custom_intent() -> None:
+            nonlocal rewrite_in_progress
+            if rewrite_in_progress:
+                return
+            raw_text = (custom_var.get() or "").strip()
+            if not raw_text:
+                messagebox.showinfo("提示", "请先输入或选择图意文本，再尝试生成。", parent=dlg)
+                return
+            base = (self.sum_base_url_var.get().strip() or self.base_url_var.get().strip())
+            key = (self.sum_api_key_var.get().strip() or self.api_key_var.get().strip())
+            model = (self.sum_model_var.get().strip() or self.model_var.get().strip())
+            if not base or not key or not model:
+                messagebox.showerror("错误", "请先填写归纳 Base URL / API Key / Model。", parent=dlg)
+                return
+            sys_prompt = self.sum_prompt_var.get().strip()
+            eng_chars = len(re.findall(r"[A-Za-z]", raw_text))
+            zh_chars = len(re.findall(r"[\u4e00-\u9fff]", raw_text))
+            prefer_english = eng_chars >= zh_chars and eng_chars > 0
+            language_hint = "使用英文" if prefer_english else "使用中文"
+            length_hint = "不超过 8 个英文单词" if prefer_english else "不超过 13 个汉字"
+            user_text = (
+                "请根据以下内容生成图意命名短语，要求：\n"
+                "1. 仅输出一个短语，使用下划线连接（示例：fig2B_cell_proliferation_heatmap）。\n"
+                f"2. 与原文语言保持一致，{language_hint}。\n"
+                f"3. {length_hint}，删除多余标点、编号与冗余描述。\n"
+                "4. 仅输出短语本身，不要添加解释或引号。\n"
+                f"原始文本：{raw_text}"
+            )
+
+            def before_run() -> None:
+                nonlocal rewrite_in_progress
+                rewrite_in_progress = True
+                status_var.set("⏳ 正在根据自定义内容生成...")
+                if rewrite_btn:
+                    rewrite_btn.config(state=tk.DISABLED)
+
+            def after_run(success: bool, payload: str) -> None:
+                nonlocal rewrite_in_progress
+                rewrite_in_progress = False
+                if rewrite_btn:
+                    rewrite_btn.config(state=tk.NORMAL)
+                if success:
+                    candidate = sanitize_filename((payload or "").strip())
+                    if candidate:
+                        custom_var.set(candidate)
+                        selected_var.set("__custom__")
+                        status_var.set("✅ 已生成推荐图意。")
+                        if custom_entry:
+                            custom_entry.focus_set()
+                            custom_entry.selection_range(0, tk.END)
+                    else:
+                        status_var.set("⚠️ 模型未返回有效内容。")
+                else:
+                    status_var.set(f"⚠️ 生成失败：{payload}")
+
+            def worker() -> None:
+                try:
+                    result = self._run_simple_chat(
+                        normalize_base_url(base),
+                        key,
+                        model,
+                        sys_prompt,
+                        user_text,
+                    )
+                    if not isinstance(result, str):
+                        result = str(result)
+                    self.after(0, lambda: after_run(True, result))
+                except Exception as exc:
+                    self.after(0, lambda: after_run(False, str(exc)))
+
+            before_run()
+            threading.Thread(target=worker, daemon=True).start()
 
         preferred_strategy = (self.strategy_var.get().strip() or "above").lower()
+        preview_strategy = "below" if preferred_strategy == "sci" else preferred_strategy
         ordered_candidates: List[Dict] = []
         preferred_title: Optional[str] = None
         if isinstance(candidates_data, list):
@@ -2147,8 +2569,8 @@ class BatchApp(tk.Tk):
             for cand in candidates_data:
                 if cand not in ordered_candidates and isinstance(cand, dict):
                     ordered_candidates.append(cand)
-            if preferred_strategy in strategy_pick:
-                preferred_title = sanitize_filename(strategy_pick[preferred_strategy].get("title") or "")
+            if preview_strategy in strategy_pick:
+                preferred_title = sanitize_filename(strategy_pick[preview_strategy].get("title") or "")
         else:
             ordered_candidates = []
         if not ordered_candidates:
@@ -2326,6 +2748,7 @@ class BatchApp(tk.Tk):
                 seq_width,
                 max_len,
                 skip_indexes=skip_set,
+                intent_language=self.intent_language_var.get().strip() or DEFAULT_INTENT_LANGUAGE,
             )
             if plan.get('items'):
                 save_attachment_plan(attach_dir, plan)

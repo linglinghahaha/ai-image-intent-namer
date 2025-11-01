@@ -6,7 +6,7 @@ AI 图片“图意”命名器（单文件、开箱即用，Windows/中文友好
 功能概述：
 - 读取 Markdown 文档，解析图片与上下文文本块，生成多种“图意”候选（上文摘要 / 下文摘要 / 区间摘要 / 显式引用融合 / 视觉理解）
 - 支持调用 OpenAI 兼容接口（Chat Completions），从命令行或环境变量读取 base-url、api-key、model
-- 提供多种命名策略：seq（纯顺序不调用AI）、above（仅上文）、below（仅下文）、between（区间）、intent（融合/智能）、hybrid（多方案，交互或自动选择）
+- 提供多种命名策略：seq（纯顺序不调用AI）、above（仅上文）、below（仅下文）、between（区间）、intent（融合/智能）、hybrid（多方案，交互或自动选择）、sci（论文图注强化）
 - 支持 dry-run（预览）、apply（实际重命名并回写链接）、no-rename（仅生成报告不改文档）、interactive（逐图选择）、save-report（输出 JSON 报告）
 - 可选下载远程图片到文档同级 attachment 目录，并将链接改为相对路径
 - 命名模板支持变量：{title}、{block}、{idx}、{intent}，默认格式类似“文档标题1_图意01”，序号宽度可配置
@@ -634,6 +634,201 @@ def explicit_override_and_focus(default_strategy: str, above: str, below: str) -
     return override_side, above_focus, below_focus
 
 # -----------------------------
+# SCI 图注分析辅助
+# -----------------------------
+
+SCI_FIG_LABEL_RE = re.compile(r"\bFig(?:ure)?\.?\s*(?P<prefix>[Ss])?\s*(?P<num>\d+)(?P<letter>[A-Za-z])?", re.IGNORECASE)
+SCI_FIG_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9])([sS]?)(?:fig|figure)[_\-\s]*(\d+)([a-z])?(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+SCI_PANEL_MARK_RE = re.compile(r"[\(\[]\s*([A-Z])\s*[\)\]]")
+SCI_PANEL_INLINE_RE = re.compile(r"(?:^|[;,\.\s])([A-H])(?:[\.:]\s*|,\s+)", re.IGNORECASE)
+
+
+def _normalize_fig_identifier(prefix: Optional[str], number: str) -> Optional[str]:
+    if not number:
+        return None
+    clean_num = re.sub(r"[^0-9A-Za-z\-]+", "", number)
+    if not clean_num:
+        return None
+    prefix_clean = (prefix or "").strip().upper()
+    clean_num = clean_num.upper()
+    return f"{prefix_clean}{clean_num}" if prefix_clean else clean_num
+
+
+def _extract_fig_from_text(text: Optional[str]) -> Optional[Tuple[str, Optional[str]]]:
+    if not text:
+        return None
+    match = SCI_FIG_LABEL_RE.search(text)
+    if not match:
+        return None
+    figure = _normalize_fig_identifier(match.group("prefix"), match.group("num"))
+    if not figure:
+        return None
+    letter = match.group("letter")
+    panel = letter.upper() if letter else None
+    return figure, panel
+
+
+def _extract_fig_from_name(name: Optional[str]) -> Optional[Tuple[str, Optional[str]]]:
+    if not name:
+        return None
+    match = SCI_FIG_TOKEN_RE.search(name)
+    if not match:
+        return None
+    prefix_flag = match.group(1) or ""
+    number = match.group(2) or ""
+    letter = match.group(3)
+    figure = _normalize_fig_identifier("S" if prefix_flag.lower() == "s" else "", number)
+    if not figure:
+        return None
+    panel = letter.upper() if letter else None
+    return figure, panel
+
+
+def _extract_panel_letter_hint(text: Optional[str]) -> Optional[str]:
+    if not text:
+        return None
+    normalized = text.replace("（", "(").replace("）", ")")
+    mark = SCI_PANEL_MARK_RE.search(normalized)
+    if mark:
+        return mark.group(1).upper()
+    inline = SCI_PANEL_INLINE_RE.search(normalized)
+    if inline:
+        return inline.group(1).upper()
+    return None
+
+
+def _collect_panel_markers(text: Optional[str]) -> Tuple[List[str], Dict[str, str]]:
+    markers: List[str] = []
+    segments: Dict[str, str] = {}
+    if not text:
+        return markers, segments
+    normalized = text.replace("（", "(").replace("）", ")")
+    matches = list(SCI_PANEL_MARK_RE.finditer(normalized))
+    if matches:
+        for idx, match in enumerate(matches):
+            letter = match.group(1).upper()
+            if letter not in markers:
+                markers.append(letter)
+            start = match.end()
+            end = matches[idx + 1].start() if idx + 1 < len(matches) else len(normalized)
+            segment = normalized[start:end].strip()
+            segment = re.sub(r"^[\s\u3000\.;:,\-]+", "", segment)
+            segment = re.sub(r"\s+", " ", segment)
+            if segment:
+                segments[letter] = segment
+    else:
+        matches_inline = list(SCI_PANEL_INLINE_RE.finditer(normalized))
+        if matches_inline:
+            for idx, match in enumerate(matches_inline):
+                letter = match.group(1).upper()
+                if letter not in markers:
+                    markers.append(letter)
+                start = match.end()
+                end = matches_inline[idx + 1].start() if idx + 1 < len(matches_inline) else len(normalized)
+                segment = normalized[start:end].strip()
+                segment = re.sub(r"^[\s\u3000\.;:,\-]+", "", segment)
+                segment = re.sub(r"\s+", " ", segment)
+                if segment:
+                    segments[letter] = segment
+    return markers, segments
+
+
+def _extract_src_stem(src: Optional[str]) -> Optional[str]:
+    if not src:
+        return None
+    cleaned = src.strip().split("#", 1)[0].split("?", 1)[0]
+    cleaned = cleaned.replace("\\", "/")
+    if "/" in cleaned:
+        cleaned = cleaned.rsplit("/", 1)[-1]
+    if not cleaned:
+        return None
+    try:
+        return Path(cleaned).stem
+    except Exception:
+        return cleaned
+
+
+def _clean_sci_summary(summary: Optional[str]) -> str:
+    if not summary:
+        return ""
+    text = WHITESPACE_RE.sub(" ", summary).strip()
+    text = re.sub(r"^(?:fig(?:ure)?\.?\s*[Ss]?\s*\d+[A-Za-z]?\s*[:\-\.,]*)", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^[\s:;,\-\.]+", "", text)
+    text = text.strip()
+    return text[:80]
+
+
+def build_sci_metadata(
+    ref_src: Optional[str],
+    alt: Optional[str],
+    title_attr: Optional[str],
+    above: str,
+    below: str,
+    above_focus: str,
+    below_focus: str,
+    block_index: int,
+    image_index: int,
+) -> Dict[str, object]:
+    figure: Optional[str] = None
+    panel: Optional[str] = None
+
+    for candidate in (below_focus, below, above_focus, above, alt or "", title_attr or ""):
+        info = _extract_fig_from_text(candidate)
+        if info:
+            fig_val, panel_val = info
+            if fig_val and not figure:
+                figure = fig_val
+            if panel_val and not panel:
+                panel = panel_val
+            if figure and panel:
+                break
+
+    stem = _extract_src_stem(ref_src)
+    if stem:
+        info_name = _extract_fig_from_name(stem)
+        if info_name:
+            fig_val, panel_val = info_name
+            if fig_val and not figure:
+                figure = fig_val
+            if panel_val and not panel:
+                panel = panel_val
+        info_text = _extract_fig_from_text(stem)
+        if info_text:
+            fig_val, panel_val = info_text
+            if fig_val and not figure:
+                figure = fig_val
+            if panel_val and not panel:
+                panel = panel_val
+        if not figure:
+            digits = re.search(r"(\d+)", stem)
+            if digits:
+                figure = digits.group(1)
+
+    panel_sequence, panel_segments = _collect_panel_markers(below or below_focus)
+    if panel_sequence and (not panel):
+        idx = (image_index - 1) if image_index and image_index > 0 else 0
+        if 0 <= idx < len(panel_sequence):
+            panel = panel_sequence[idx]
+
+    if not panel:
+        panel_hint = _extract_panel_letter_hint(alt) or _extract_panel_letter_hint(title_attr)
+        if panel_hint:
+            panel = panel_hint
+
+    fallback_block = str(block_index) if block_index else None
+
+    return {
+        "figure": figure,
+        "panel": panel,
+        "panel_sequence": panel_sequence,
+        "panel_segments": panel_segments,
+        "fallback_block": fallback_block,
+    }
+
+# -----------------------------
 # OpenAI 兼容调用与 JSON 解析
 # -----------------------------
 
@@ -829,6 +1024,9 @@ def build_ai_messages(
       "normalized_title": "用于文件名的清洗版"
     }
     """
+    intent_language = (intent_language or DEFAULT_INTENT_LANGUAGE).lower()
+    reason_language = (reason_language or DEFAULT_REASON_LANGUAGE).lower()
+    english_mode = intent_language.startswith("en")
     sys_prompt = (
         "你是教材风格的命名助手。严格遵循：只输出一个 JSON 对象，不得包含任何说明性文字、前后缀、代码块围栏`、注释或省略号（.../……）。"
         "基于提供的上下文与线索，输出严格 JSON（不含多余文本）。"
@@ -872,13 +1070,10 @@ def build_ai_messages(
 
     above_segments = make_priority_list(above_c, prefer_tail=True)
     below_segments = make_priority_list(below_c, prefer_tail=False)
-    intent_language = (intent_language or DEFAULT_INTENT_LANGUAGE).lower()
-    reason_language = (reason_language or DEFAULT_REASON_LANGUAGE).lower()
     intent_locale = LANGUAGE_LOCALES.get(intent_language)
     if intent_locale is None and intent_language != "auto":
         intent_locale = LANGUAGE_LOCALES.get("zh")
     reason_locale = LANGUAGE_LOCALES.get(reason_language, LANGUAGE_LOCALES.get('zh'))
-    english_mode = intent_language.startswith("en")
     term_length_range = [6, 32] if english_mode else [6, 16]
     if intent_language == "auto":
         title_language_instr = "match_source"
@@ -1413,6 +1608,7 @@ def build_attachment_plan(
     seq_width: int,
     max_len: int,
     skip_indexes: Optional[Set[int]] = None,
+    intent_language: str = DEFAULT_INTENT_LANGUAGE,
 ) -> Dict:
     skip_indexes = set(skip_indexes or set())
     attach_dir.mkdir(parents=True, exist_ok=True)
@@ -1463,7 +1659,7 @@ def build_attachment_plan(
         index = i + 1
         if index in skip_indexes:
             continue
-        chosen = sanitize_intent_for_language(chosen_map.get(index) or "图意", cfg.intent_language)
+        chosen = sanitize_intent_for_language(chosen_map.get(index) or "图意", intent_language)
         final_base = name_with_template(
             name_template,
             title,
@@ -1472,7 +1668,7 @@ def build_attachment_plan(
             chosen,
             seq_width,
             max_len,
-            intent_language=cfg.intent_language,
+            intent_language=intent_language,
             global_index=index,
         )
 
@@ -1847,7 +2043,7 @@ class ItemResult:
 @dataclass
 class Config:
     mode: str                         # dry-run / apply / no-rename / interactive
-    strategy: str                     # seq / above / below / between / intent / hybrid
+    strategy: str                     # seq / above / below / between / intent / hybrid / sci
     base_url: Optional[str]
     api_key: Optional[str]
     model: Optional[str]
@@ -1871,40 +2067,10 @@ class Config:
     batch_result_cb: Optional[Callable[[Dict], None]] = None
     llm_event_cb: Optional[Callable[[Dict], None]] = None
 
-def pick_intent_phrase(strategy: str, ai: Optional[Dict], above: str, below: str, between: str) -> Tuple[str, str]:
-    """
-    返回 (intent_phrase, used_strategy)
-    """
-    if strategy == "seq":
-        return "图意", "seq"
-    if ai:
-        cands = ai.get("candidates", [])
-        if strategy == "above":
-            # 找到 above 候选或退化为 normalized_title
-            for c in cands:
-                if c.get("strategy") == "above" and c.get("title"):
-                    return c["title"], "above"
-            return ai.get("normalized_title", "图意"), "above"
-        if strategy == "below":
-            for c in cands:
-                if c.get("strategy") == "below" and c.get("title"):
-                    return c["title"], "below"
-            return ai.get("normalized_title", "图意"), "below"
-        if strategy == "between":
-            # 没有专门 between 由 intent 近似
-            for c in cands:
-                if c.get("strategy") in ("intent", "between") and c.get("title"):
-                    return c["title"], c.get("strategy")
-            return ai.get("normalized_title", "图意"), "between"
-        if strategy in ("intent", "hybrid"):
-            # 采用 best 或 normalized_title
-            best = ai.get("best")
-            if best:
-                for c in cands:
-                    if c.get("strategy") == best and c.get("title"):
-                        return c["title"], best
-            return ai.get("normalized_title", "图意"), "intent"
-    # 无 AI：从文本直接提取（简化关键词方案）
+def pick_intent_phrase(strategy: str, ai: Optional[Dict], above: str, below: str, between: str, *, context: Optional[Dict] = None) -> Tuple[str, str]:
+    """返回 (intent_phrase, used_strategy)"""
+    ctx = context or {}
+
     def simple_terms(s: str) -> str:
         if not s.strip():
             return "图意"
@@ -1926,6 +2092,145 @@ def pick_intent_phrase(strategy: str, ai: Optional[Dict], above: str, below: str
         sel = re.sub(r"\s+", "", sel)
         sel = sel[:16]
         return sel or "图意"
+    if strategy == "seq":
+        return "图意", "seq"
+
+    if strategy == "sci":
+        meta = ctx.get("sci_meta")
+        if not isinstance(meta, dict):
+            ref = ctx.get("ref")
+            block_idx_val = ctx.get("block_index")
+            image_idx_val = ctx.get("image_index")
+            try:
+                block_idx_int = int(block_idx_val)
+            except Exception:
+                block_idx_int = 0
+            try:
+                image_idx_int = int(image_idx_val)
+            except Exception:
+                image_idx_int = 1
+            meta = build_sci_metadata(
+                getattr(ref, "src", None),
+                getattr(ref, "alt", None),
+                getattr(ref, "title", None),
+                above,
+                below,
+                ctx.get("above_focus", above),
+                ctx.get("below_focus", below),
+                block_idx_int,
+                image_idx_int if image_idx_int > 0 else 1,
+            )
+            ctx["sci_meta"] = meta
+
+        figure = meta.get("figure") if isinstance(meta, dict) else None
+        panel = meta.get("panel") if isinstance(meta, dict) else None
+        panel_sequence = list((meta.get("panel_sequence") or [])) if isinstance(meta, dict) else []
+        panel_segments = dict(meta.get("panel_segments") or {}) if isinstance(meta, dict) else {}
+        fallback_block = meta.get("fallback_block") if isinstance(meta, dict) else None
+        if not figure and fallback_block:
+            figure = fallback_block
+
+        try:
+            image_idx = int(ctx.get("image_index", 1))
+        except Exception:
+            image_idx = 1
+        if image_idx <= 0:
+            image_idx = 1
+
+        if not panel and panel_sequence:
+            seq_idx = image_idx - 1
+            if 0 <= seq_idx < len(panel_sequence):
+                panel = panel_sequence[seq_idx]
+
+        summary_source: Optional[str] = None
+        panel_key = (panel or "").upper() if panel else None
+        if panel_key and panel_key in panel_segments:
+            summary_source = panel_segments.get(panel_key)
+
+        if not summary_source and ai:
+            cands = ai.get("candidates", [])
+            for c in cands:
+                if c.get("strategy") == "below" and c.get("title"):
+                    summary_source = c["title"]
+                    break
+            if not summary_source:
+                summary_source = ai.get("normalized_title")
+
+        if not summary_source:
+            summary_source = below or between or above
+
+        summary_clean = _clean_sci_summary(summary_source)
+        if not summary_clean:
+            summary_clean = simple_terms(below or between or above)
+
+        info_from_summary = _extract_fig_from_text(summary_source or "")
+        if info_from_summary:
+            fig_from_summary, panel_from_summary = info_from_summary
+            if fig_from_summary and not figure:
+                figure = fig_from_summary
+            if panel_from_summary and not panel:
+                panel = panel_from_summary
+
+        block_idx = ctx.get("block_index")
+        if not figure and isinstance(block_idx, int) and block_idx > 0:
+            figure = str(block_idx)
+        elif not figure and isinstance(block_idx, str) and block_idx.isdigit():
+            figure = block_idx
+
+        figure_id: Optional[str] = None
+        if figure:
+            figure_id = re.sub(r"[^0-9A-Za-z\-]+", "", str(figure)).upper()
+            if not figure_id:
+                figure_id = None
+
+        if not figure_id:
+            fallback_phrase, fallback_used = pick_intent_phrase("below", ai, above, below, between, context=ctx)
+            return fallback_phrase, f"sci->{fallback_used}"
+
+        panel_letter = panel
+        if panel_letter:
+            panel_letter = re.sub(r"[^A-Za-z]", "", str(panel_letter).upper())[:1]
+        elif panel_sequence and len(panel_sequence) > 1:
+            seq_idx = image_idx - 1
+            if 0 <= seq_idx < len(panel_sequence):
+                seq_letter = re.sub(r"[^A-Za-z]", "", str(panel_sequence[seq_idx]).upper())
+                if seq_letter:
+                    panel_letter = seq_letter[:1]
+
+        label = f"fig{figure_id}"
+        if panel_letter and not label.endswith(panel_letter):
+            label = f"{label}{panel_letter}"
+
+        phrase = label if not summary_clean else f"{label}_{summary_clean}"
+        return phrase, "sci"
+
+    if ai:
+        cands = ai.get("candidates", [])
+        if strategy == "above":
+            # 找到 above 候选并替换为 normalized_title
+            for c in cands:
+                if c.get("strategy") == "above" and c.get("title"):
+                    return c["title"], "above"
+            return ai.get("normalized_title", "图意"), "above"
+        if strategy == "below":
+            for c in cands:
+                if c.get("strategy") == "below" and c.get("title"):
+                    return c["title"], "below"
+            return ai.get("normalized_title", "图意"), "below"
+        if strategy == "between":
+            # 无专属 between 时退回 intent/normalized
+            for c in cands:
+                if c.get("strategy") in ("intent", "between") and c.get("title"):
+                    return c["title"], c.get("strategy")
+            return ai.get("normalized_title", "图意"), "between"
+        if strategy in ("intent", "hybrid"):
+            # 遵循 best 或 normalized_title
+            best = ai.get("best")
+            if best:
+                for c in cands:
+                    if c.get("strategy") == best and c.get("title"):
+                        return c["title"], best
+            return ai.get("normalized_title", "图意"), "intent"
     if strategy == "above":
         return simple_terms(above), "above"
     if strategy == "below":
@@ -1933,7 +2238,6 @@ def pick_intent_phrase(strategy: str, ai: Optional[Dict], above: str, below: str
     if strategy == "between":
         return simple_terms(between), "between"
     return simple_terms(above or below or between), "seq"
-
 def process_document(md_path: Path, cfg: Config) -> Dict:
     text = read_text(md_path)
     title = extract_doc_title(text, md_path)
@@ -1969,6 +2273,8 @@ def process_document(md_path: Path, cfg: Config) -> Dict:
     cursor = 0
 
     chunk_size = max(1, getattr(cfg, "chunk_size", 5))
+    if cfg.strategy == "sci":
+        chunk_size = max(1, total_images)
     pending: List[Dict] = []
     cancelled = False
     attach_dir = md_path.parent / (cfg.attach_dir_name or "attachment")
@@ -1976,6 +2282,42 @@ def process_document(md_path: Path, cfg: Config) -> Dict:
     mapping_changed = False
     if cfg.mode in ("apply", "interactive"):
         mapping = load_image_mapping(attach_dir)
+
+    def _propagate_sci_within_block(contexts: List[Dict], block_index: int) -> None:
+        block_contexts = [ctx for ctx in contexts if ctx.get("block_index") == block_index]
+        if len(block_contexts) <= 1:
+            return
+        anchor_meta: Optional[Dict[str, object]] = None
+        for ctx in reversed(block_contexts):
+            meta = ctx.get("sci_meta") or {}
+            seq = meta.get("panel_sequence")
+            if seq and isinstance(seq, list) and len(seq) > 1:
+                anchor_meta = meta  # type: ignore[assignment]
+                break
+        if not anchor_meta:
+            return
+        figure = anchor_meta.get("figure") or anchor_meta.get("fallback_block")
+        seq_list = anchor_meta.get("panel_sequence") or []
+        segments = anchor_meta.get("panel_segments") or {}
+        if not isinstance(seq_list, list):
+            return
+        for idx, ctx in enumerate(block_contexts):
+            meta = ctx.get("sci_meta") or {}
+            if figure and not meta.get("figure"):
+                meta["figure"] = figure
+            if idx < len(seq_list):
+                panel_letter = seq_list[idx]
+                if panel_letter and not meta.get("panel"):
+                    meta["panel"] = panel_letter
+                if (
+                    isinstance(panel_letter, str)
+                    and isinstance(segments, dict)
+                    and panel_letter in segments
+                ):
+                    meta.setdefault("panel_segments", {})
+                    if isinstance(meta["panel_segments"], dict):
+                        meta["panel_segments"].setdefault(panel_letter, segments[panel_letter])
+            ctx["sci_meta"] = meta
 
     def emit_llm_event(event: Dict) -> None:
         if cfg.llm_event_cb:
@@ -2184,6 +2526,7 @@ def process_document(md_path: Path, cfg: Config) -> Dict:
             context["above_focus"],
             context["below_focus"],
             context["between"],
+            context=context,
         )
         normalized_for_item = sanitize_intent_for_language(intent_phrase, cfg.intent_language)
         if len(normalized_for_item.strip()) < 3:
@@ -2314,7 +2657,8 @@ def process_document(md_path: Path, cfg: Config) -> Dict:
         effective_strategy = cfg.strategy
         if cfg.strategy in ("above", "below") and override_side in ("above", "below"):
             effective_strategy = override_side
-
+        elif cfg.strategy == "sci" and override_side == "above":
+            effective_strategy = "above"
         visible_above = re.findall(r"[一-鿿A-Za-z0-9]", above)
         is_new_block = False
         if len(visible_above) >= 4:
@@ -2349,6 +2693,17 @@ def process_document(md_path: Path, cfg: Config) -> Dict:
 
         vision_src = build_vision_src(md_path, ref.src) if cfg.vision else None
 
+        sci_meta = build_sci_metadata(
+            ref.src,
+            ref.alt,
+            ref.title,
+            above,
+            below,
+            above_focus,
+            below_focus,
+            block_idx,
+            img_idx,
+        )
         context = {
             "index": i + 1,
             "ref": ref,
@@ -2364,8 +2719,12 @@ def process_document(md_path: Path, cfg: Config) -> Dict:
             "vision_src": vision_src,
             "alt": ref.alt,
             "title_attr": ref.title,
+            "sci_meta": sci_meta,
+            "sci_override": override_side,
         }
         pending.append(context)
+        if cfg.strategy == "sci":
+            _propagate_sci_within_block(pending, block_idx)
 
         should_flush = len(pending) == chunk_size or i == total_images - 1
         if should_flush:
@@ -2383,7 +2742,8 @@ def process_document(md_path: Path, cfg: Config) -> Dict:
             if len(batch_contexts) == 1:
                 ai_map = {batch_contexts[0]["index"]: call_single(batch_contexts[0])}
             else:
-                ai_map = call_batch(batch_contexts)
+                ord_contexts = list(reversed(batch_contexts)) if cfg.strategy == "sci" else batch_contexts
+                ai_map = call_batch(ord_contexts)
             for ctx in batch_contexts:
                 finalize_context(ctx, ai_map.get(ctx["index"]))
             pending.clear()
@@ -2534,10 +2894,34 @@ def process_document_pick_one(md_path: Path, cfg: Config, target_index: int) -> 
             parsed = safe_parse_json(ai_out)
             ai_json = validate_ai_result(parsed, intent_language=cfg.intent_language) if parsed else None
 
+    target_context = {
+        "ref": target_ref,
+        "block_index": target_block,
+        "image_index": target_img,
+        "above": target_above,
+        "below": target_below,
+        "between": target_between,
+        "explicit_refs": target_explicit,
+        "above_focus": target_above_eff,
+        "below_focus": target_below_eff,
+    }
+    target_context["sci_meta"] = build_sci_metadata(
+        target_ref.src,
+        target_ref.alt,
+        target_ref.title,
+        target_above,
+        target_below,
+        target_above_eff,
+        target_below_eff,
+        target_block,
+        target_img,
+    )
+
     # 提供三种选择的短语
-    above_phrase, _ = pick_intent_phrase("above", ai_json, target_above_eff, target_below_eff, target_between)
-    below_phrase, _ = pick_intent_phrase("below", ai_json, target_above_eff, target_below_eff, target_between)
-    vision_phrase, _ = pick_intent_phrase("intent", ai_json, target_above_eff, target_below_eff, target_between)
+    above_phrase, _ = pick_intent_phrase("above", ai_json, target_above_eff, target_below_eff, target_between, context=target_context)
+    below_phrase, _ = pick_intent_phrase("below", ai_json, target_above_eff, target_below_eff, target_between, context=target_context)
+    vision_phrase, _ = pick_intent_phrase("intent", ai_json, target_above_eff, target_below_eff, target_between, context=target_context)
+
 
     print("\n—— 单图选择 ——")
     print(f"图片 #{target_index}/{len(refs)} | src: {target_ref.src}")
@@ -2652,7 +3036,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("path", type=Path, help="目标 Markdown 文件路径")
     p.add_argument("--mode", choices=["dry-run", "apply", "no-rename", "interactive", "pick-one"], default="dry-run", help="运行模式（新增：pick-one 单图选择）")
-    p.add_argument("--strategy", choices=["seq", "above", "below", "between", "intent", "hybrid"], default="intent", help="命名策略")
+    p.add_argument("--strategy", choices=["seq", "above", "below", "between", "intent", "hybrid", "sci"], default="intent", help="命名策略")
     p.add_argument("--attach-dir-name", default="attachments", help="附件目录名（相对文档同级）")
     p.add_argument("--download", action="store_true", help="下载远程图片到附件目录并改写链接")
     p.add_argument("--restore-moved", action="store_true", help="还原附件目录中的已搬运图片并恢复引用后立即退出")

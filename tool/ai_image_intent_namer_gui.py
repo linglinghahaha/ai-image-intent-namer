@@ -161,7 +161,7 @@ class App(tk.Tk):
         # 策略、模板、序号宽度、文件名长度
         ttk.Label(top, text="策略:").grid(row=1, column=0, sticky="w", pady=(8, 0))
         self.strategy_var = tk.StringVar(value="intent")
-        ttk.Combobox(top, textvariable=self.strategy_var, values=["seq", "above", "below", "between", "intent", "hybrid"], width=10, state="readonly").grid(row=1, column=1, sticky="w", pady=(8, 0))
+        ttk.Combobox(top, textvariable=self.strategy_var, values=["seq", "above", "below", "between", "intent", "hybrid", "sci"], width=10, state="readonly").grid(row=1, column=1, sticky="w", pady=(8, 0))
 
         ttk.Label(top, text="命名模板:").grid(row=1, column=2, sticky="e", padx=(12, 2), pady=(8, 0))
         self.template_var = tk.StringVar(value=DEFAULT_NAME_TEMPLATE)

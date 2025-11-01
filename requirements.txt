@@ -1,1 +1,1 @@
-requests\npillow\n
+pillow
