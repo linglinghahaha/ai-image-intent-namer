@@ -211,5 +211,6 @@ tool/ai_image_intent_namer_gui.profiles.json
 
 # Project-specific ignores
 .vscode/
+.github/
 diff_temp.txt
 original_*.py
