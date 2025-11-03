@@ -1,1 +1,18 @@
-pillow
+# GUI_Roo 依赖包
+# 核心依赖
+tkinter          # GUI框架（Python内置）
+customtkinter>=5.2.0  # 现代化GUI组件库
+
+# 图像处理
+Pillow>=8.0.0    # 图像显示和处理
+
+# 网络请求
+requests>=2.25.0 # HTTP请求
+
+# 数据处理
+jsonschema>=3.2.0 # JSON验证
+
+# 开发依赖（可选）
+# pytest>=6.0.0    # 单元测试
+# black>=21.0.0     # 代码格式化
+# flake8>=3.8.0     # 代码检查

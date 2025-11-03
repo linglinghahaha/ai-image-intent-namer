@@ -228,14 +228,25 @@ class BatchApp(tk.Tk):
         self._template_preview_var = tk.StringVar(value="")
         self.template_entry: Optional[ttk.Entry] = None
         self.template_combo: Optional[ttk.Combobox] = None
+        self.template_action_button: Optional[ttk.Menubutton] = None
+        self.template_actions_menu: Optional[tk.Menu] = None
+        self.template_action_label = tk.StringVar(value="模板操作")
+        self.template_presets_menu: Optional[tk.Menu] = None
         self.template_preset_var = tk.StringVar(value=DEFAULT_TEMPLATE_PRESET_NAME)
         self.template_desc_var = tk.StringVar(value="")
         self.template_presets: Dict[str, Dict[str, str]] = {}
         self._template_listbox: Optional[tk.Listbox] = None
+        self.header_status_var = tk.StringVar(value="准备就绪")
+        self.app_subtitle_var = tk.StringVar(value="批量导入 Markdown · 快速生成 · 复审写回")
+        self.queue_status_var = tk.StringVar(value="尚未选择 Markdown 文件")
+        self.current_document_var = tk.StringVar(value="未选择文档")
+        self.current_document_meta_var = tk.StringVar(value="")
+        self.operation_hint_var = tk.StringVar(value="Ctrl+O 导入文件 | Ctrl+Enter 运行批量预览")
+        self.progress_var = tk.DoubleVar(value=0.0)
         self._init_styles()
         self.title(APP_TITLE)
-        self.geometry("1100x720")
-        self.minsize(1000, 650)
+        self.geometry("1320x820")
+        self.minsize(1180, 720)
 
         self.files: List[Path] = []
         self.stop_flag = False
@@ -492,17 +503,24 @@ class BatchApp(tk.Tk):
                 break
         if matched:
             self.template_preset_var.set(matched)
-            self.template_desc_var.set(self._template_description(matched))
         else:
             self.template_preset_var.set(CUSTOM_TEMPLATE_NAME)
-            self.template_desc_var.set(self._template_description(CUSTOM_TEMPLATE_NAME))
+        self._update_template_action_label()
 
     def _refresh_template_presets_ui(self, select: Optional[str] = None, apply_template: bool = False) -> None:
-        if not self.template_combo:
-            return
         names = sorted(self.template_presets.keys())
         values = [CUSTOM_TEMPLATE_NAME] + names
-        self.template_combo.configure(values=values)
+
+        if self.template_presets_menu:
+            self.template_presets_menu.delete(0, tk.END)
+            for name in values:
+                self.template_presets_menu.add_radiobutton(
+                    label=name,
+                    value=name,
+                    variable=self.template_preset_var,
+                    command=lambda n=name: self._on_template_preset_chosen(n),
+                )
+
         if select is None:
             self._match_template_to_preset()
         else:
@@ -514,8 +532,25 @@ class BatchApp(tk.Tk):
                     template = str(info.get("template", "") or "")
                     if template:
                         self.template_var.set(template)
-            self.template_desc_var.set(self._template_description(target))
-        self.after(10, self._ensure_template_listbox_binding)
+        self._update_template_action_label()
+
+    def _update_template_action_label(self) -> None:
+        current = (self.template_preset_var.get() or "").strip()
+        if not current or current == CUSTOM_TEMPLATE_NAME:
+            label = "更多操作"
+            desc_name = CUSTOM_TEMPLATE_NAME
+        else:
+            label = f"{current} ▾"
+            desc_name = current
+        if hasattr(self, "template_action_label"):
+            self.template_action_label.set(label)
+        if hasattr(self, "template_desc_var"):
+            self.template_desc_var.set(self._template_description(desc_name))
+
+    def _on_template_preset_chosen(self, name: str) -> None:
+        target = (name or "").strip() or CUSTOM_TEMPLATE_NAME
+        apply = target != CUSTOM_TEMPLATE_NAME
+        self._refresh_template_presets_ui(select=target, apply_template=apply)
 
     def _ensure_template_listbox_binding(self) -> None:
         if not self.template_combo:
@@ -663,6 +698,7 @@ class BatchApp(tk.Tk):
                 return tab
         return None
 
+
     def _init_styles(self) -> None:
         style = ttk.Style(self)
         try:
@@ -671,47 +707,91 @@ class BatchApp(tk.Tk):
         except Exception:
             pass
         style.configure("Heading.TLabel", font=("Microsoft YaHei", 14, "bold"))
+        style.configure("AppBarHeading.TLabel", font=("Microsoft YaHei", 16, "bold"))
         style.configure("Subheading.TLabel", foreground="#666666")
+        style.configure("Caption.TLabel", foreground="#8a8a8a")
+        style.configure("StatusBadge.TLabel", font=("Microsoft YaHei", 10, "bold"), foreground="#0f5132", background="#d1e7dd", padding=(10, 4))
+        style.map("StatusBadge.TLabel", background=[("active", "#cfe2d6")])
         style.configure("Accent.TButton", padding=(12, 6), foreground="#ffffff", background="#1e88e5")
         style.map("Accent.TButton", background=[("active", "#1565c0"), ("disabled", "#90caf9")], foreground=[("disabled", "#eeeeee")])
+        style.configure("Toolbar.TButton", padding=(10, 4))
+        style.map("Toolbar.TButton", background=[("active", "#e0e0e0")])
         style.configure("TLabelFrame", padding=(12, 8))
+        style.configure("Card.TLabelframe", padding=(10, 10))
         style.configure("TNotebook.Tab", padding=(18, 8))
+        style.configure("TemplateGroup.TLabelframe", padding=(12, 10))
+        style.configure("TemplateDesc.TLabel", foreground="#555555")
+        style.configure("TemplatePreview.TLabel", foreground="#1a7f37", font=("Consolas", 10, "bold"))
+
+    def _set_progress(self, fraction: float) -> None:
+        try:
+            value = float(fraction)
+        except Exception:
+            value = 0.0
+        value = max(0.0, min(1.0, value))
+
+        def _apply() -> None:
+            try:
+                self.progress_var.set(value)
+            except Exception:
+                pass
+            try:
+                self.update_idletasks()
+            except Exception:
+                pass
+
+        if threading.current_thread() is threading.main_thread():
+            _apply()
+        else:
+            try:
+                self.after(0, _apply)
+            except Exception:
+                pass
+
+    def _set_header_status(self, message: str) -> None:
+        def _apply_status() -> None:
+            try:
+                self.header_status_var.set(message)
+            except Exception:
+                pass
+        if threading.current_thread() is threading.main_thread():
+            _apply_status()
+        else:
+            try:
+                self.after(0, _apply_status)
+            except Exception:
+                pass
+
+    def _update_queue_summary(self) -> None:
+        count = len(getattr(self, "files", []))
+        if count <= 0:
+            self.queue_status_var.set("尚未选择 Markdown 文件")
+        else:
+            self.queue_status_var.set(f"{count} 个 Markdown 文件待处理")
+
+    def _update_document_header(self, tab: Optional[TabState]) -> None:
+        if not tab:
+            self.current_document_var.set("未选择文档")
+            self.current_document_meta_var.set("")
+            return
+        name = tab.title or tab.md_path.name
+        self.current_document_var.set(name)
+        total = len(tab.item_uis)
+        completed = sum(1 for item in tab.item_uis if item.final_var.get().strip())
+        skipped = sum(1 for item in tab.item_uis if item.skip_var.get())
+        parts: List[str] = [str(tab.md_path)]
+        if total:
+            parts.append(f"{completed}/{total} 已命名")
+        if skipped:
+            parts.append(f"跳过 {skipped}")
+        self.current_document_meta_var.set(" · ".join(parts))
+
+    def _on_notebook_changed(self, _event: Optional[tk.Event] = None) -> None:
+        self._update_document_header(self._current_tab())
 
     def _build_widgets(self) -> None:
-        ttk.Label(self, text="批量处理 · Markdown 图片命名助手", style="Heading.TLabel").pack(side=tk.TOP, anchor="w", padx=20, pady=(16, 4))
-        ttk.Label(self, text="选择多个 Markdown 文件后串行预览，可逐张重命名并写回。", style="Subheading.TLabel").pack(side=tk.TOP, anchor="w", padx=20, pady=(0, 12))
-
-        top_region = ttk.Frame(self)
-        top_region.pack(side=tk.TOP, fill=tk.X, padx=20, pady=(0, 10))
-        top_region.columnconfigure(0, weight=3)
-        top_region.columnconfigure(1, weight=2)
-
-        files_frame = ttk.LabelFrame(top_region, text="批量文件")
-        files_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
-        files_frame.columnconfigure(0, weight=1)
-        files_frame.rowconfigure(0, weight=1)
-
-        list_container = ttk.Frame(files_frame, padding=(4, 0))
-        list_container.grid(row=0, column=0, sticky="nsew")
-        list_container.columnconfigure(0, weight=1)
-        list_container.rowconfigure(0, weight=1)
-
-        self.files_listbox = tk.Listbox(list_container, height=5, selectmode=tk.EXTENDED, relief=tk.FLAT, borderwidth=0)
-        self.files_listbox.grid(row=0, column=0, sticky="nsew")
-        list_scroll = ttk.Scrollbar(list_container, orient="vertical", command=self.files_listbox.yview)
-        self.files_listbox.configure(yscrollcommand=list_scroll.set)
-        list_scroll.grid(row=0, column=1, sticky="ns")
-
-        btns_col = ttk.Frame(files_frame, padding=(0, 4))
-        btns_col.grid(row=0, column=1, sticky="ns", padx=(8, 12), pady=10)
-        ttk.Button(btns_col, text="添加文件...", style="Accent.TButton", command=self._on_add_files).pack(fill=tk.X, pady=(0, 8))
-        ttk.Button(btns_col, text="移除选中", command=self._on_remove_selected).pack(fill=tk.X, pady=4)
-        ttk.Button(btns_col, text="清空列表", command=self._on_clear_list).pack(fill=tk.X, pady=4)
-
-        ai = ttk.LabelFrame(top_region, text="AI 参数与策略")
-        ai.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
-        ai.columnconfigure(1, weight=1)
-        ai.columnconfigure(3, weight=1)
+        self.rowconfigure(1, weight=1)
+        self.columnconfigure(0, weight=1)
 
         self.base_url_var = tk.StringVar(value=os.environ.get("OPENAI_BASE_URL", "https://api.siliconflow.cn"))
         self.api_key_var = tk.StringVar(value=os.environ.get("OPENAI_API_KEY", ""))
@@ -721,7 +801,6 @@ class BatchApp(tk.Tk):
         self.rate_limit_var = tk.DoubleVar(value=0.4)
         self.batch_size_var = tk.IntVar(value=5)
 
-        # 翻译/归纳 独立API与Prompt（默认回落到主模型配置）
         self.trans_base_url_var = tk.StringVar(value=os.environ.get("TRANS_BASE_URL", self.base_url_var.get()))
         self.trans_api_key_var = tk.StringVar(value=os.environ.get("TRANS_API_KEY", self.api_key_var.get()))
         self.trans_model_var = tk.StringVar(value=os.environ.get("TRANS_MODEL", self.model_var.get()))
@@ -729,74 +808,15 @@ class BatchApp(tk.Tk):
         self.sum_api_key_var = tk.StringVar(value=os.environ.get("SUM_API_KEY", self.api_key_var.get()))
         self.sum_model_var = tk.StringVar(value=os.environ.get("SUM_MODEL", self.model_var.get()))
         self.trans_prompt_var = tk.StringVar(
-            value="你是专业翻译，请将以下文本翻译为简体中文，保留术语准确，忠实原意，不添加解释。只输出译文。"
+            value="请以专业译者身份，将输入文本翻译为目标语言，确保准确、忠实且优雅，只输出译文。"
         )
         self.sum_prompt_var = tk.StringVar(
-            value="你是学术写作助手，请用简洁的中文为以下内容生成摘要，条理清晰，保留关键信息，不超过150字。只输出摘要。"
+            value="请以学术写作者视角，将输入内容压缩为结构清晰的摘要，突出核心意图，限制150字，只输出摘要。"
         )
 
-        # 第一行：配置档和按钮
-        ttk.Label(ai, text="配置档:").grid(row=0, column=0, sticky="w", padx=(8, 4), pady=6)
-        self.profile_name_var = tk.StringVar()
-        self.profile_combo = ttk.Combobox(ai, textvariable=self.profile_name_var, values=[], width=18)
-        self.profile_combo.grid(row=0, column=1, sticky="we", pady=6, padx=(0, 4))
-
-        ttk.Button(ai, text="载入", command=self._on_profile_load).grid(row=0, column=2, padx=(2, 2), pady=6, sticky="w")
-        ttk.Button(ai, text="测试API", command=self._on_test_api).grid(row=0, column=3, padx=(2, 2), pady=6, sticky="e")
-        ttk.Button(ai, text="测试图片识别", command=self._on_test_vision).grid(row=0, column=4, padx=(2, 2), pady=6, sticky="w")
-        ttk.Button(ai, text="API/模型配置...", style="Accent.TButton", command=self._open_api_config_dialog).grid(row=0, column=5, padx=(2, 6), pady=6, sticky="e")
-
-        self.model_summary_var = tk.StringVar()
-        ttk.Label(ai, textvariable=self.model_summary_var, foreground="#575757").grid(row=1, column=0, columnspan=6, sticky="we", padx=(8, 4), pady=(0, 8))
-
-        # 第二行：策略和模板
-        ttk.Label(ai, text="策略:").grid(row=2, column=0, sticky="w", padx=(8, 4))
-        self.strategy_var = tk.StringVar(value="above")
-        ttk.Combobox(ai, textvariable=self.strategy_var, values=["seq", "above", "below", "between", "intent", "hybrid", "sci"], width=12, state="readonly").grid(row=2, column=1, sticky="we", padx=(0, 6))
-
-        ttk.Label(ai, text="命名模板:").grid(row=2, column=2, sticky="w", padx=(8, 4))
         self.template_var = tk.StringVar(value=DEFAULT_NAME_TEMPLATE)
-        template_frame = ttk.Frame(ai)
-        template_frame.grid(row=2, column=3, sticky="we", padx=(0, 6))
-        template_frame.columnconfigure(0, weight=1)
-        template_frame.columnconfigure(1, weight=1)
-        self.template_combo = ttk.Combobox(template_frame, textvariable=self.template_preset_var, values=[], state="readonly", width=18)
-        self.template_combo.grid(row=0, column=0, sticky="we")
-        self.template_combo.bind("<<ComboboxSelected>>", self._on_template_preset_selected)
-        self.template_combo.bind("<ButtonPress-1>", lambda _e: self.after(10, self._ensure_template_listbox_binding))
-        self.template_combo.bind("<KeyPress-Down>", lambda _e: self.after(10, self._ensure_template_listbox_binding))
-        self.template_combo.bind("<KeyPress-Up>", lambda _e: self.after(10, self._ensure_template_listbox_binding))
-        ttk.Label(template_frame, textvariable=self.template_desc_var, foreground="#555555", anchor="w").grid(row=0, column=1, sticky="we", padx=(6, 0))
-        btn_frame = ttk.Frame(template_frame)
-        btn_frame.grid(row=0, column=2, rowspan=2, sticky="ns", padx=(6, 0))
-        ttk.Button(btn_frame, text="保存模板", command=self._on_template_preset_save).pack(fill=tk.X)
-        ttk.Button(btn_frame, text="删除模板", command=self._on_template_preset_delete).pack(fill=tk.X, pady=(4, 0))
-        ttk.Button(btn_frame, text="模板向导", command=self._open_template_helper).pack(fill=tk.X, pady=(4, 0))
-        self.template_entry = ttk.Entry(template_frame, textvariable=self.template_var)
-        self.template_entry.grid(row=1, column=0, columnspan=2, sticky="we", pady=(6, 0))
-
-        ttk.Label(ai, text="序号宽度:").grid(row=2, column=4, sticky="w", padx=(8, 4))
+        self.strategy_var = tk.StringVar(value="above")
         self.seq_width_var = tk.IntVar(value=2)
-        ttk.Spinbox(ai, from_=1, to=4, textvariable=self.seq_width_var, width=5).grid(row=2, column=5, sticky="w")
-
-        ttk.Label(ai, text="每批张数:").grid(row=3, column=0, sticky="w", padx=(8, 4), pady=6)
-        ttk.Spinbox(ai, from_=1, to=20, textvariable=self.batch_size_var, width=5).grid(row=3, column=1, sticky="w", padx=(0, 8), pady=6)
-
-        ttk.Label(ai, text="界面语言:").grid(row=4, column=0, sticky="w", padx=(8, 4))
-        self.ui_lang_combo = ttk.Combobox(ai, textvariable=self._ui_language_display_var, state="readonly", width=16)
-        self.ui_lang_combo.grid(row=4, column=1, sticky="we", padx=(0, 6))
-        self.ui_lang_combo.bind("<<ComboboxSelected>>", self._on_ui_language_selected)
-
-        ttk.Label(ai, text="图意语言:").grid(row=4, column=2, sticky="w", padx=(8, 4))
-        self.intent_lang_combo = ttk.Combobox(ai, textvariable=self._intent_language_display_var, state="readonly", width=18)
-        self.intent_lang_combo.grid(row=4, column=3, sticky="we", padx=(0, 6))
-        self.intent_lang_combo.bind("<<ComboboxSelected>>", self._on_intent_language_selected)
-        self._refresh_language_selectors()
-
-
-        # 选项
-        opts = ttk.Frame(self)
-        opts.pack(side=tk.TOP, fill=tk.X, padx=20, pady=(0, 10))
         self.verbose_var = tk.BooleanVar(value=True)
         self.backup_var = tk.BooleanVar(value=True)
         self.pre_localize_var = tk.BooleanVar(value=False)
@@ -804,51 +824,264 @@ class BatchApp(tk.Tk):
         self.attach_var = tk.StringVar(value=DEFAULT_ATTACH_DIR)
         self.max_len_var = tk.IntVar(value=80)
         self.normalize_html_var = tk.BooleanVar(value=True)
+
         self.template_var.trace_add("write", self._on_template_value_changed)
         self.seq_width_var.trace_add("write", self._on_name_rule_changed)
         self.max_len_var.trace_add("write", self._on_name_rule_changed)
 
-        ttk.Checkbutton(opts, text="详细日志", variable=self.verbose_var).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Checkbutton(opts, text="写回前备份（推荐）", variable=self.backup_var).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Checkbutton(opts, text="预先收集图片到附件目录", variable=self.pre_localize_var).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Checkbutton(opts, text="启用视觉理解(VLM)", variable=self.vision_var).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Checkbutton(opts, text="规范嵌套HTML图片", variable=self.normalize_html_var).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Label(opts, text="附件目录:").pack(side=tk.LEFT, padx=(8, 4))
-        ttk.Entry(opts, textvariable=self.attach_var, width=16).pack(side=tk.LEFT)
-        ttk.Label(opts, text="文件名最大长度:").pack(side=tk.LEFT, padx=(12, 4))
-        ttk.Spinbox(opts, from_=30, to=200, textvariable=self.max_len_var, width=6).pack(side=tk.LEFT)
+        app_bar = ttk.Frame(self, padding=(20, 16, 20, 12))
+        app_bar.grid(row=0, column=0, sticky="we")
+        app_bar.columnconfigure(1, weight=1)
 
-        # 操作按钮
-        actions = ttk.Frame(self, padding=(20, 8))
-        actions.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
-        ttk.Button(actions, text="批量预览（串行）", style="Accent.TButton", command=self._on_batch_preview).pack(side=tk.LEFT, padx=6)
-        ttk.Button(actions, text="查找/替换", command=self._open_find_replace_dialog).pack(side=tk.LEFT, padx=6)
-        ttk.Button(actions, text="待办事项", command=self._open_todo_list).pack(side=tk.LEFT, padx=6)
-        ttk.Button(actions, text="导入图意...", command=self._on_import_intents).pack(side=tk.LEFT, padx=6)
-        ttk.Button(actions, text="停止", command=self._on_stop).pack(side=tk.LEFT, padx=6)
-        ttk.Button(actions, text="退出", command=self.destroy).pack(side=tk.RIGHT, padx=6)
-        ttk.Label(
-            actions,
-            text="提示：SiliconFlow 上多模态建议使用 *VL-Instruct* 类模型（例 Qwen/Qwen2.5-VL-3B-Instruct）。",
-            foreground="#777",
-        ).pack(side=tk.LEFT, padx=16)
+        title = ttk.Label(app_bar, text="AI 图片意图批量命名工作台", style="AppBarHeading.TLabel")
+        title.grid(row=0, column=0, sticky="w")
+        status_badge = ttk.Label(app_bar, textvariable=self.header_status_var, style="StatusBadge.TLabel")
+        status_badge.grid(row=0, column=1, sticky="w", padx=(16, 0))
 
-        self.nb = ttk.Notebook(self)
-        self.nb.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=20, pady=(0, 12))
+        quick_actions = ttk.Frame(app_bar)
+        quick_actions.grid(row=0, column=2, sticky="e")
+        ttk.Button(quick_actions, text="模板助手", style="Toolbar.TButton", command=self._open_template_helper).pack(side=tk.LEFT, padx=4)
+        ttk.Button(quick_actions, text="待办", style="Toolbar.TButton", command=self._open_todo_list).pack(side=tk.LEFT, padx=4)
+        ttk.Button(quick_actions, text="API/模型", style="Toolbar.TButton", command=self._open_api_config_dialog).pack(side=tk.LEFT, padx=4)
 
-        log_frame = ttk.LabelFrame(self, text="日志")
-        log_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=False, padx=20, pady=(0, 16))
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=7, wrap=tk.WORD, relief=tk.FLAT, borderwidth=0, font=("Microsoft YaHei", 10))
+        subtitle = ttk.Label(app_bar, textvariable=self.app_subtitle_var, style="Subheading.TLabel")
+        subtitle.grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
+        lang_frame = ttk.Frame(app_bar)
+        lang_frame.grid(row=1, column=2, sticky="e", pady=(8, 0))
+        ttk.Label(lang_frame, text="界面语言:").pack(side=tk.LEFT, padx=(0, 4))
+        self.ui_lang_combo = ttk.Combobox(lang_frame, textvariable=self._ui_language_display_var, state="readonly", width=12)
+        self.ui_lang_combo.pack(side=tk.LEFT)
+        self.ui_lang_combo.bind("<<ComboboxSelected>>", self._on_ui_language_selected)
+        ttk.Label(lang_frame, text="命名语言:").pack(side=tk.LEFT, padx=(12, 4))
+        self.intent_lang_combo = ttk.Combobox(lang_frame, textvariable=self._intent_language_display_var, state="readonly", width=12)
+        self.intent_lang_combo.pack(side=tk.LEFT)
+        self.intent_lang_combo.bind("<<ComboboxSelected>>", self._on_intent_language_selected)
+
+        hint_label = ttk.Label(app_bar, textvariable=self.operation_hint_var, style="Caption.TLabel")
+        hint_label.grid(row=2, column=0, columnspan=3, sticky="we", pady=(12, 0))
+
+        content = ttk.Frame(self, padding=(20, 0, 20, 0))
+        content.grid(row=1, column=0, sticky="nsew")
+        content.rowconfigure(0, weight=1)
+        content.columnconfigure(0, weight=1)
+
+        main_paned = ttk.PanedWindow(content, orient=tk.HORIZONTAL)
+        main_paned.grid(row=0, column=0, sticky="nsew", pady=(0, 12))
+
+        resources_panel = ttk.Frame(main_paned, padding=(0, 0, 12, 0))
+        resources_panel.columnconfigure(0, weight=1)
+        resources_panel.rowconfigure(0, weight=1)
+        main_paned.add(resources_panel, weight=1)
+
+        queue_group = ttk.LabelFrame(resources_panel, text="文件队列", style="Card.TLabelframe")
+        queue_group.grid(row=0, column=0, sticky="nsew")
+        queue_group.columnconfigure(0, weight=1)
+        queue_group.rowconfigure(2, weight=1)
+
+        ttk.Label(queue_group, textvariable=self.queue_status_var, style="Subheading.TLabel").grid(row=0, column=0, sticky="w")
+        queue_toolbar = ttk.Frame(queue_group)
+        queue_toolbar.grid(row=1, column=0, sticky="we", pady=(6, 6))
+        ttk.Button(queue_toolbar, text="添加文件...", style="Accent.TButton", command=self._on_add_files).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(queue_toolbar, text="移除选中", style="Toolbar.TButton", command=self._on_remove_selected).pack(side=tk.LEFT, padx=4)
+        ttk.Button(queue_toolbar, text="清空列表", style="Toolbar.TButton", command=self._on_clear_list).pack(side=tk.LEFT, padx=4)
+
+        list_container = ttk.Frame(queue_group)
+        list_container.grid(row=2, column=0, sticky="nsew")
+        list_container.columnconfigure(0, weight=1)
+        list_container.rowconfigure(0, weight=1)
+        self.files_listbox = tk.Listbox(list_container, height=12, selectmode=tk.EXTENDED, relief=tk.FLAT, borderwidth=0)
+        self.files_listbox.grid(row=0, column=0, sticky="nsew")
+        list_scroll = ttk.Scrollbar(list_container, orient="vertical", command=self.files_listbox.yview)
+        self.files_listbox.configure(yscrollcommand=list_scroll.set)
+        list_scroll.grid(row=0, column=1, sticky="ns")
+
+        queue_footer = ttk.Label(queue_group, text="双击条目载入文档复审。", style="Caption.TLabel")
+        queue_footer.grid(row=3, column=0, sticky="w", pady=(6, 0))
+
+        center_panel = ttk.Frame(main_paned)
+        center_panel.columnconfigure(0, weight=1)
+        center_panel.rowconfigure(2, weight=1)
+        main_paned.add(center_panel, weight=4)
+
+        doc_header = ttk.Frame(center_panel, padding=(0, 0, 0, 8))
+        doc_header.grid(row=0, column=0, sticky="we")
+        doc_header.columnconfigure(0, weight=1)
+        ttk.Label(doc_header, textvariable=self.current_document_var, style="Heading.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(doc_header, textvariable=self.current_document_meta_var, style="Caption.TLabel").grid(row=1, column=0, sticky="w", pady=(4, 0))
+
+        toolbar = ttk.Frame(center_panel)
+        toolbar.grid(row=1, column=0, sticky="we")
+        toolbar.columnconfigure(5, weight=1)
+        ttk.Button(toolbar, text="批量预览并生成", style="Accent.TButton", command=self._on_batch_preview).grid(row=0, column=0, padx=(0, 8), pady=(0, 4), sticky="w")
+        ttk.Button(toolbar, text="查找/替换", style="Toolbar.TButton", command=self._open_find_replace_dialog).grid(row=0, column=1, padx=4, pady=(0, 4))
+        ttk.Button(toolbar, text="导入意图...", style="Toolbar.TButton", command=self._on_import_intents).grid(row=0, column=2, padx=4, pady=(0, 4))
+        ttk.Button(toolbar, text="待办", style="Toolbar.TButton", command=self._open_todo_list).grid(row=0, column=3, padx=4, pady=(0, 4))
+        ttk.Button(toolbar, text="停止", style="Toolbar.TButton", command=self._on_stop).grid(row=0, column=4, padx=4, pady=(0, 4))
+        ttk.Button(toolbar, text="退出", style="Toolbar.TButton", command=self.destroy).grid(row=0, column=5, padx=4, pady=(0, 4), sticky="e")
+
+        self.nb = ttk.Notebook(center_panel)
+        self.nb.grid(row=2, column=0, sticky="nsew", pady=(8, 8))
+        self.nb.bind("<<NotebookTabChanged>>", self._on_notebook_changed)
+
+        progress_frame = ttk.Frame(center_panel)
+        progress_frame.grid(row=3, column=0, sticky="we")
+        self.progressbar = ttk.Progressbar(progress_frame, variable=self.progress_var, maximum=1.0)
+        self.progressbar.pack(fill=tk.X, expand=True)
+
+        right_panel = ttk.Frame(main_paned, padding=(12, 0, 0, 0))
+        right_panel.columnconfigure(0, weight=1)
+        right_panel.rowconfigure(0, weight=1)
+        main_paned.add(right_panel, weight=2)
+
+        config_notebook = ttk.Notebook(right_panel)
+        config_notebook.grid(row=0, column=0, sticky="nsew")
+
+        ai_tab = ttk.Frame(config_notebook, padding=12)
+        ai_tab.columnconfigure(1, weight=1)
+        ai_tab.columnconfigure(2, weight=0)
+        config_notebook.add(ai_tab, text="AI")
+
+        ttk.Label(ai_tab, text="配置档案:").grid(row=0, column=0, sticky="w", pady=(0, 6))
+        self.profile_name_var = tk.StringVar()
+        self.profile_combo = ttk.Combobox(ai_tab, textvariable=self.profile_name_var, values=[], width=20)
+        self.profile_combo.grid(row=0, column=1, sticky="we", pady=(0, 6))
+
+        profile_buttons = ttk.Frame(ai_tab)
+        profile_buttons.grid(row=0, column=2, sticky="e", padx=(8, 0), pady=(0, 6))
+        ttk.Button(profile_buttons, text="载入", command=self._on_profile_load).pack(side=tk.LEFT, padx=2)
+        ttk.Button(profile_buttons, text="测试API", command=self._on_test_api).pack(side=tk.LEFT, padx=2)
+        ttk.Button(profile_buttons, text="测试识图", command=self._on_test_vision).pack(side=tk.LEFT, padx=2)
+        ttk.Button(profile_buttons, text="API/模型配置...", style="Accent.TButton", command=self._open_api_config_dialog).pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(ai_tab, text="Base URL:").grid(row=1, column=0, sticky="w", pady=6)
+        ttk.Entry(ai_tab, textvariable=self.base_url_var, width=40).grid(row=1, column=1, columnspan=2, sticky="we", pady=6)
+
+        ttk.Label(ai_tab, text="API Key:").grid(row=2, column=0, sticky="w", pady=6)
+        api_entry = ttk.Entry(ai_tab, textvariable=self.api_key_var, width=40, show="*")
+        api_entry.grid(row=2, column=1, columnspan=2, sticky="we", pady=6)
+        show_var = tk.BooleanVar(value=False)
+
+        def _toggle_api() -> None:
+            api_entry.configure(show="" if show_var.get() else "*")
+
+        ttk.Checkbutton(ai_tab, text="显示 API Key", variable=show_var, command=_toggle_api).grid(row=3, column=1, sticky="w")
+
+        ttk.Label(ai_tab, text="模型:").grid(row=4, column=0, sticky="w", pady=6)
+        ttk.Entry(ai_tab, textvariable=self.model_var, width=40).grid(row=4, column=1, columnspan=2, sticky="we", pady=6)
+
+        ttk.Label(ai_tab, text="请求超时(秒):").grid(row=5, column=0, sticky="w", pady=6)
+        ttk.Spinbox(ai_tab, from_=10, to=300, textvariable=self.timeout_var, width=8).grid(row=5, column=1, sticky="w", pady=6)
+
+        ttk.Label(ai_tab, text="最大重试:").grid(row=6, column=0, sticky="w", pady=6)
+        ttk.Spinbox(ai_tab, from_=0, to=10, textvariable=self.retries_var, width=8).grid(row=6, column=1, sticky="w", pady=6)
+
+        ttk.Label(ai_tab, text="请求间隔(s):").grid(row=7, column=0, sticky="w", pady=6)
+        ttk.Entry(ai_tab, textvariable=self.rate_limit_var, width=10).grid(row=7, column=1, sticky="w", pady=6)
+
+        ttk.Separator(ai_tab, orient="horizontal").grid(row=8, column=0, columnspan=3, sticky="we", pady=(12, 8))
+
+        trans_frame = ttk.LabelFrame(ai_tab, text="翻译 API/模型", padding=(8, 6))
+        trans_frame.grid(row=9, column=0, columnspan=3, sticky="we")
+        trans_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(trans_frame, text="Base URL:").grid(row=0, column=0, sticky="w", pady=4, padx=(4, 6))
+        ttk.Entry(trans_frame, textvariable=self.trans_base_url_var, width=36).grid(row=0, column=1, sticky="we", pady=4)
+        ttk.Label(trans_frame, text="API Key:").grid(row=1, column=0, sticky="w", pady=4, padx=(4, 6))
+        ttk.Entry(trans_frame, textvariable=self.trans_api_key_var, width=36, show="*").grid(row=1, column=1, sticky="we", pady=4)
+        ttk.Label(trans_frame, text="模型:").grid(row=2, column=0, sticky="w", pady=4, padx=(4, 6))
+        ttk.Entry(trans_frame, textvariable=self.trans_model_var, width=36).grid(row=2, column=1, sticky="we", pady=4)
+        ttk.Label(trans_frame, text="提示词:").grid(row=3, column=0, sticky="nw", pady=4, padx=(4, 6))
+        ttk.Entry(trans_frame, textvariable=self.trans_prompt_var, width=48).grid(row=3, column=1, sticky="we", pady=4)
+
+        sum_frame = ttk.LabelFrame(ai_tab, text="摘要 API/模型", padding=(8, 6))
+        sum_frame.grid(row=10, column=0, columnspan=3, sticky="we", pady=(8, 0))
+        sum_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(sum_frame, text="Base URL:").grid(row=0, column=0, sticky="w", pady=4, padx=(4, 6))
+        ttk.Entry(sum_frame, textvariable=self.sum_base_url_var, width=36).grid(row=0, column=1, sticky="we", pady=4)
+        ttk.Label(sum_frame, text="API Key:").grid(row=1, column=0, sticky="w", pady=4, padx=(4, 6))
+        ttk.Entry(sum_frame, textvariable=self.sum_api_key_var, width=36, show="*").grid(row=1, column=1, sticky="we", pady=4)
+        ttk.Label(sum_frame, text="模型:").grid(row=2, column=0, sticky="w", pady=4, padx=(4, 6))
+        ttk.Entry(sum_frame, textvariable=self.sum_model_var, width=36).grid(row=2, column=1, sticky="we", pady=4)
+        ttk.Label(sum_frame, text="提示词:").grid(row=3, column=0, sticky="nw", pady=4, padx=(4, 6))
+        ttk.Entry(sum_frame, textvariable=self.sum_prompt_var, width=48).grid(row=3, column=1, sticky="we", pady=4)
+
+        naming_tab = ttk.Frame(config_notebook, padding=12)
+        naming_tab.columnconfigure(0, weight=1)
+        config_notebook.add(naming_tab, text="命名")
+
+        template_group = ttk.LabelFrame(naming_tab, text="命名模板", style="TemplateGroup.TLabelframe")
+        template_group.grid(row=0, column=0, sticky="we")
+        template_group.columnconfigure(1, weight=1)
+        template_group.columnconfigure(7, weight=1)
+
+        ttk.Label(template_group, text="格式:").grid(row=0, column=0, sticky="w", pady=4)
+        self.template_entry = ttk.Entry(template_group, textvariable=self.template_var)
+        self.template_entry.grid(row=0, column=1, sticky="we", padx=(4, 6), pady=4)
+
+        self.template_action_button = ttk.Menubutton(template_group, textvariable=self.template_action_label)
+        self.template_action_button.grid(row=0, column=2, sticky="w", padx=(0, 6), pady=4)
+        actions_menu = tk.Menu(self.template_action_button, tearoff=False)
+        self.template_presets_menu = tk.Menu(actions_menu, tearoff=False)
+        actions_menu.add_cascade(label="选择预设", menu=self.template_presets_menu)
+        actions_menu.add_separator()
+        actions_menu.add_command(label="保存为预设", command=self._on_template_preset_save)
+        actions_menu.add_command(label="删除当前预设", command=self._on_template_preset_delete)
+        actions_menu.add_separator()
+        actions_menu.add_command(label="模板助手...", command=self._open_template_helper)
+        self.template_action_button["menu"] = actions_menu
+        self.template_actions_menu = actions_menu
+
+        ttk.Label(template_group, textvariable=self.template_desc_var, style="TemplateDesc.TLabel", anchor="w").grid(row=0, column=3, sticky="w", padx=(4, 12))
+        ttk.Label(template_group, text="序号位数:").grid(row=0, column=4, sticky="w")
+        ttk.Spinbox(template_group, from_=1, to=4, textvariable=self.seq_width_var, width=4).grid(row=0, column=5, sticky="w", padx=(4, 8))
+        ttk.Label(template_group, text="预览:").grid(row=0, column=6, sticky="e")
+        ttk.Label(template_group, textvariable=self._template_preview_var, style="TemplatePreview.TLabel", anchor="w", wraplength=240).grid(row=0, column=7, sticky="we")
+
+        strategy_frame = ttk.LabelFrame(naming_tab, text="候选策略", padding=(8, 6))
+        strategy_frame.grid(row=1, column=0, sticky="we", pady=(12, 0))
+        ttk.Label(strategy_frame, text="策略:").grid(row=0, column=0, sticky="w")
+        ttk.Combobox(strategy_frame, textvariable=self.strategy_var, values=["seq", "above", "below", "between", "intent", "hybrid", "sci"], state="readonly", width=14).grid(row=0, column=1, sticky="w", padx=(6, 0))
+        ttk.Label(strategy_frame, text="批次大小:").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Spinbox(strategy_frame, from_=1, to=20, textvariable=self.batch_size_var, width=6).grid(row=1, column=1, sticky="w", pady=(8, 0))
+
+        runtime_tab = ttk.Frame(config_notebook, padding=12)
+        runtime_tab.columnconfigure(1, weight=1)
+        config_notebook.add(runtime_tab, text="运行")
+
+        ttk.Checkbutton(runtime_tab, text="详细日志", variable=self.verbose_var).grid(row=0, column=0, sticky="w", pady=4, padx=(0, 12))
+        ttk.Checkbutton(runtime_tab, text="写回前备份", variable=self.backup_var).grid(row=0, column=1, sticky="w", pady=4, padx=(0, 12))
+        ttk.Checkbutton(runtime_tab, text="预下载图片附件", variable=self.pre_localize_var).grid(row=1, column=0, sticky="w", pady=4, padx=(0, 12))
+        ttk.Checkbutton(runtime_tab, text="启用视觉模型(VLM)", variable=self.vision_var).grid(row=1, column=1, sticky="w", pady=4, padx=(0, 12))
+        ttk.Checkbutton(runtime_tab, text="规范化 HTML 图片", variable=self.normalize_html_var).grid(row=2, column=0, sticky="w", pady=4, padx=(0, 12))
+
+        ttk.Label(runtime_tab, text="附件目录:").grid(row=3, column=0, sticky="e", pady=4, padx=(12, 4))
+        ttk.Entry(runtime_tab, textvariable=self.attach_var, width=24).grid(row=3, column=1, sticky="we", pady=4)
+        ttk.Label(runtime_tab, text="命名最大长度:").grid(row=4, column=0, sticky="e", pady=4, padx=(12, 4))
+        ttk.Spinbox(runtime_tab, from_=30, to=200, textvariable=self.max_len_var, width=6).grid(row=4, column=1, sticky="w", pady=4)
+
+        footer = ttk.Frame(self, padding=(20, 0, 20, 20))
+        footer.grid(row=2, column=0, sticky="nsew")
+        footer.columnconfigure(0, weight=1)
+        footer.rowconfigure(0, weight=1)
+
+        log_frame = ttk.LabelFrame(footer, text="运行日志")
+        log_frame.grid(row=0, column=0, sticky="nsew")
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=8, wrap=tk.WORD, relief=tk.FLAT, borderwidth=0, font=("Microsoft YaHei", 10))
         self.log_text.pack(fill=tk.BOTH, expand=True)
+
         self._refresh_template_presets_ui()
         self._update_model_summary()
         self._update_template_preview()
+        self._refresh_language_selectors()
+        self._update_queue_summary()
+        self._update_document_header(self._current_tab())
+        self._set_progress(0.0)
         if self.verbose_var.get():
-            self._log("✅ 系统就绪。详细日志已启用，将显示完整的处理过程。")
-            self._log("💡 提示：勾选「详细日志」可查看串行处理流程，包括每张图片的LLM调用和结果返回状态。")
+            self._log("系统已开启详细日志，可在下方查看完整的调用流程。")
         else:
-            self._log("就绪。选择多个 Markdown 后执行“批量预览”。")
-
+            self._log("添加 Markdown 文件后，点击“批量预览并生成”即可开始。")
     def _update_tab_label(self, tab: TabState) -> None:
         if not tab or not hasattr(self, "nb"):
             self.after(0, lambda p=md_path: self._clear_tab_processing(p))
@@ -870,6 +1103,7 @@ class BatchApp(tk.Tk):
         if processing:
             tab.completed = False
         self._update_tab_label(tab)
+        self._update_document_header(tab)
 
     def _mark_tab_completed(self, md_path: Path) -> None:
         tab = self.tabs.get(str(md_path))
@@ -878,6 +1112,7 @@ class BatchApp(tk.Tk):
         tab.completed = True
         tab.processing = False
         self._update_tab_label(tab)
+        self._update_document_header(tab)
 
     def _clear_tab_processing(self, md_path: Path) -> None:
         tab = self.tabs.get(str(md_path))
@@ -901,7 +1136,7 @@ class BatchApp(tk.Tk):
         if text is None:
             return ""
         s = str(text).strip()
-        return s if len(s) <= limit else s[: limit - 1] + "…"
+        return s if len(s) <= limit else s[: limit - 1] + "..."
 
     def _normalize_document_if_needed(self, md_path: Path) -> str:
         try:
@@ -929,7 +1164,7 @@ class BatchApp(tk.Tk):
     def _update_model_summary(self) -> None:
         base = (self.base_url_var.get().strip() if hasattr(self, "base_url_var") else "") or "未设置"
         model = (self.model_var.get().strip() if hasattr(self, "model_var") else "") or "未设置"
-        base_disp = base if len(base) <= 48 else base[:45] + "…"
+        base_disp = base if len(base) <= 48 else base[:45] + "..."
         key_status = "已配置" if hasattr(self, "api_key_var") and self.api_key_var.get().strip() else "未配置"
         if hasattr(self, "model_summary_var"):
             self.model_summary_var.set(f"当前模型：{model} | Base URL：{base_disp} | API Key：{key_status}")
@@ -1220,6 +1455,7 @@ class BatchApp(tk.Tk):
                 self.files_listbox.insert(tk.END, str(path))
                 added += 1
         self._log(f"已添加 {added} 个文件。当前队列：{len(self.files)}")
+        self._update_queue_summary()
 
     def _on_remove_selected(self) -> None:
         sel = list(self.files_listbox.curselection())[::-1]
@@ -1231,11 +1467,13 @@ class BatchApp(tk.Tk):
             except Exception:
                 pass
         self._log(f"已移除选中项。当前队列：{len(self.files)}")
+        self._update_queue_summary()
 
     def _on_clear_list(self) -> None:
         self.files.clear()
         self.files_listbox.delete(0, tk.END)
         self._log("已清空文件列表。")
+        self._update_queue_summary()
 
     def _gather_config(self, mode: str) -> Config:
         base = normalize_base_url(self.base_url_var.get().strip())
@@ -1449,6 +1687,7 @@ class BatchApp(tk.Tk):
 
     def _on_stop(self) -> None:
         self.stop_flag = True
+        self._set_header_status("正在尝试停止批量预览…")
 
     def _on_import_intents(self) -> None:
         tab = self._current_tab()
@@ -1518,6 +1757,11 @@ class BatchApp(tk.Tk):
     def _batch_preview_worker(self) -> None:
         cfg = self._gather_config(mode="dry-run")
         total_files = len(self.files)
+        self._set_progress(0.0)
+        if total_files == 0:
+            self._set_header_status("准备就绪")
+        else:
+            self._set_header_status("批量预览进行中…")
 
         if self.verbose_var.get():
             self._log_async(f"🔄 开始批量预览串行处理，共 {total_files} 个文件")
@@ -1525,11 +1769,20 @@ class BatchApp(tk.Tk):
         for i, md in enumerate(self.files, 1):
             if self.stop_flag:
                 self._log_async(f"⏹️ 用户停止处理（进度 {i-1}/{total_files}）")
+                self._set_header_status("批量预览已中止")
                 break
 
             if self.verbose_var.get():
                 self._log_async(f"📁 处理文件中... [{i}/{total_files}] {md.name}")
             self._process_file_in_worker(md, cfg)
+            if total_files:
+                self._set_progress(i / total_files)
+
+        if not self.stop_flag and total_files:
+            self._set_progress(1.0)
+            self._set_header_status("批量预览完成")
+        elif total_files == 0:
+            self._set_header_status("准备就绪")
 
         if self.verbose_var.get():
             self._log_async("✅ 批量预览完成。" if not self.stop_flag else "⚠️ 批量预览被用户中断。")
@@ -1822,6 +2075,7 @@ class BatchApp(tk.Tk):
             tab.page.destroy()
         except Exception:
             pass
+        self._update_document_header(self._current_tab())
 
     def _clear_inner(self, tab: TabState) -> None:
         for w in list(tab.inner_frame.children.values()):
@@ -1874,7 +2128,7 @@ class BatchApp(tk.Tk):
             title_attr = item_data.get("title_attr")
 
             ttk.Label(row, text=str(index), width=4).grid(row=0, column=0, sticky="w")
-            src_disp = src if len(src) <= 80 else (src[:77] + "…")
+            src_disp = src if len(src) <= 80 else (src[:77] + "...")
             ttk.Label(row, text=src_disp, width=48).grid(row=0, column=1, sticky="w")
 
             intent_var = tk.StringVar(value=item_data.get("normalized_title") or "图意")
@@ -1917,6 +2171,7 @@ class BatchApp(tk.Tk):
         for item_ui in tab.item_uis:
             item_ui.intent_var.trace_add("write", lambda *_args, t=tab: self._schedule_recalc(t))
             item_ui.skip_var.trace_add("write", lambda *_args, t=tab: self._schedule_recalc(t))
+        self._update_document_header(tab)
 
     def _schedule_recalc(self, tab: TabState) -> None:
         if tab.recalc_job:
@@ -1976,6 +2231,7 @@ class BatchApp(tk.Tk):
                 dup_index=dup_idx,
             )
             item.final_var.set(final_name)
+        self._update_document_header(tab)
 
     def _recalc_all_tabs(self) -> None:
         for tab in self.tabs.values():

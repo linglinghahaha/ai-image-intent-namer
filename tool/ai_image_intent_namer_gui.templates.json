@@ -1,0 +1,14 @@
+{
+  "标题_全局序号_图意": {
+    "template": "{title}_{index:02d}_{intent}",
+    "description": "标题_全局序号_图意"
+  },
+  "标题_段内序号_图意": {
+    "template": "{title}_{block:02d}-{idx:02d}_{intent}",
+    "description": "标题_段落序号-段内序号_图意"
+  },
+  "三位序号_图意": {
+    "template": "{index:03d}_{intent}",
+    "description": "三位全局序号_图意"
+  }
+}
