@@ -9,8 +9,14 @@ import { FindReplaceBar } from './components/FindReplaceBar';
 import { Toaster } from './components/ui/sonner';
 import { usePresets } from './hooks/usePresets';
 import { useBackend } from '@desktop/hooks/useBackend';
-import type { BackendPreviewResponse, BackendPreviewItem } from '@desktop/types/backend';
-import type { AIPreset, NamingPreset, RuntimePreset } from './types/presets';
+import type {
+  BackendApplyResponse,
+  BackendCandidateResponse,
+  BackendLogEntry,
+  BackendPreviewResponse,
+  BackendPreviewItem,
+} from '@desktop/types/backend';
+import type { APIConfig, AIPreset, NamingPreset, RuntimePreset } from './types/presets';
 
 export interface MarkdownFile {
   id: string;
@@ -20,6 +26,14 @@ export interface MarkdownFile {
   imageCount: number;
   processedCount: number;
   lastModified: Date;
+  title?: string;
+}
+
+export interface CandidateOption {
+  name: string;
+  strategy?: string;
+  reason?: string;
+  confidence?: number;
 }
 
 export interface ImageEntry {
@@ -27,12 +41,19 @@ export interface ImageEntry {
   index: number;
   originalPath: string;
   intent: string;
-  candidates: string[];
+  candidates: CandidateOption[];
+  bestStrategy?: string;
   finalName: string;
   skipped: boolean;
   status: 'pending' | 'processing' | 'completed' | 'error';
   thumbnail?: string;
-  context?: string;
+  aboveText?: string;
+  belowText?: string;
+  betweenText?: string;
+  explicitRefs?: string[];
+  aiError?: string | null;
+  aiRaw?: string | null;
+  requestMode?: string | null;
 }
 
 export interface Profile {
@@ -83,6 +104,19 @@ function createMarkdownFileDescriptor(file: File, key: string): MarkdownFile {
   };
 }
 
+function mapApiConfigToSettings(api: APIConfig, runtime: RuntimePreset) {
+  return {
+    base_url: api.baseUrl,
+    api_key: api.apiKey,
+    model: api.model,
+    timeout: runtime.timeout ?? 120,
+    max_retries: runtime.retryCount ?? 3,
+    rate_limit: 0.4,
+    vision: runtime.vision,
+    batch_size: Math.max(1, runtime.concurrency ?? 5),
+  };
+}
+
 function buildPreviewPayload(
   file: MarkdownFile,
   aiPreset: AIPreset,
@@ -92,16 +126,7 @@ function buildPreviewPayload(
 ) {
   return {
     md_path: file.path,
-    ai: {
-      base_url: aiPreset.mainApi.baseUrl,
-      api_key: aiPreset.mainApi.apiKey,
-      model: aiPreset.mainApi.model,
-      timeout: runtimePreset.timeout ?? 120,
-      max_retries: runtimePreset.retryCount ?? 3,
-      rate_limit: 0.4,
-      vision: runtimePreset.vision,
-      batch_size: Math.max(1, runtimePreset.concurrency ?? 5),
-    },
+    ai: mapApiConfigToSettings(aiPreset.mainApi, runtimePreset),
     naming: {
       strategy: NAMING_STRATEGY_MAP[namingPreset.strategy] ?? 'above',
       template: namingPreset.template,
@@ -123,23 +148,39 @@ function toImageEntry(
   fileId: string,
   item: BackendPreviewItem,
 ): ImageEntry {
-  const candidates = Array.isArray(item.candidates)
-    ? item.candidates
-        .map(candidate => candidate?.name ?? candidate?.intent ?? '')
-        .filter(Boolean)
+  const candidates: CandidateOption[] = Array.isArray(item.candidates)
+    ? item.candidates.map((candidate) => ({
+        name: candidate?.name ?? '',
+        strategy: candidate?.strategy,
+        reason: candidate?.reason,
+        confidence:
+          typeof candidate?.confidence === 'number'
+            ? candidate.confidence
+            : undefined,
+      }))
     : [];
+
+  const normalizedIntent = item.normalized_title ?? '';
+  const suggestedName = item.suggested_name ?? normalizedIntent;
 
   return {
     id: `img-${fileId}-${item.index}`,
     index: item.index,
     originalPath: item.src,
-    intent: item.normalized_title ?? '',
+    intent: normalizedIntent,
     candidates,
-    finalName: item.normalized_title ?? '',
+    bestStrategy: item.best,
+    finalName: suggestedName ?? normalizedIntent,
     skipped: false,
     status: 'pending',
     thumbnail: undefined,
-    context: item.above_text || item.between_text || '',
+    aboveText: item.above_text ?? '',
+    belowText: item.below_text ?? '',
+    betweenText: item.between_text ?? '',
+    explicitRefs: item.explicit_refs ?? [],
+    aiError: item.ai_error ?? null,
+    aiRaw: item.ai_raw ?? null,
+    requestMode: item.request_mode ?? null,
   };
 }
 
@@ -153,7 +194,13 @@ function generateMockEntries(fileId: string, count: number): ImageEntry[] {
     finalName: '',
     skipped: false,
     status: 'pending',
-    context: '',
+    aboveText: '',
+    belowText: '',
+    betweenText: '',
+    explicitRefs: [],
+    aiError: null,
+    aiRaw: null,
+    requestMode: null,
   }));
 }
 
@@ -167,6 +214,8 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [showFindReplace, setShowFindReplace] = useState(false);
   const [language, setLanguage] = useState<'zh' | 'en'>('zh');
+  const [reviewOpen, setReviewOpen] = useState(false);
+
   const { client, backendReachable, lastError } = useBackend();
   
   // 预设管理
@@ -194,40 +243,60 @@ export default function App() {
 
   const selectedFile = files.find(f => f.id === selectedFileId);
   const selectedImage = imageEntries.find(img => img.id === selectedImageId);
+  const currentIndex = selectedImage ? imageEntries.findIndex(e => e.id === selectedImage.id) : -1;
+  const previousImage = currentIndex > 0 ? imageEntries[currentIndex - 1] : undefined;
+  const nextImage = currentIndex >= 0 && currentIndex < imageEntries.length - 1 ? imageEntries[currentIndex + 1] : undefined;
 
-  const addLog = (level: LogEntry['level'], message: string) => {
-    const newLog: LogEntry = {
-      id: Date.now().toString(),
+  const addLog = useCallback((level: LogEntry['level'], message: string) => {
+    const entry: LogEntry = {
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
       timestamp: new Date(),
       level,
       message,
     };
-    setLogs(prev => [...prev, newLog]);
-  };
+    setLogs(prev => [...prev, entry]);
+  }, []);
+
+  const appendBackendLogs = useCallback(
+    (entries?: BackendLogEntry[], scope?: string) => {
+      if (!entries || entries.length === 0) return;
+      setLogs(prev => [
+        ...prev,
+        ...entries.map((entry, index) => {
+          const levelMap: Record<string, LogEntry['level']> = {
+            warning: 'warning',
+            error: 'error',
+            info: 'info',
+            debug: 'info',
+          };
+          const ts = entry.ts ? new Date(entry.ts * 1000) : new Date();
+          const level = levelMap[entry.level] ?? 'info';
+          const prefix = scope ? `[${scope}] ` : '';
+          return {
+            id: `${Date.now()}-${index}`,
+            timestamp: ts,
+            level,
+            message: `${prefix}${entry.message}`,
+          };
+        }),
+      ]);
+    },
+    [],
+  );
 
   const loadImageEntriesForFile = useCallback(
     async (file: MarkdownFile | undefined, resetSelection = false) => {
-      if (!file) {
-        return;
-      }
+      if (!file) return;
+
       if (!backendReachable) {
         const fallbackEntries = generateMockEntries(file.id, file.imageCount || 8);
         setImageEntries(fallbackEntries);
-        setFiles(prev =>
-          prev.map(item =>
-            item.id === file.id
-              ? {
-                  ...item,
-                  status: 'completed',
-                  imageCount: fallbackEntries.length,
-                  processedCount: 0,
-                }
-              : item,
-          ),
-        );
-        if (resetSelection && fallbackEntries.length > 0) {
-          setSelectedImageId(fallbackEntries[0].id);
-        }
+        setFiles(prev => prev.map(item => item.id === file.id
+          ? { ...item, status: 'completed', imageCount: fallbackEntries.length, processedCount: 0 }
+          : item,
+        ));
+        if (resetSelection && fallbackEntries.length > 0) setSelectedImageId(fallbackEntries[0].id);
+        addLog('warning', '后端未连接，使用示例数据。');
         return;
       }
 
@@ -240,198 +309,195 @@ export default function App() {
       );
 
       setIsProcessing(true);
-      setFiles(prev =>
-        prev.map(item =>
-          item.id === file.id ? { ...item, status: 'processing' } : item,
-        ),
-      );
+      setFiles(prev => prev.map(item => item.id === file.id ? { ...item, status: 'processing' } : item));
 
       try {
-        const response = await client.previewDocument<BackendPreviewResponse>(payload);
+        const response = await client.previewDocument(payload);
         const items = (response.items ?? []).map(item => toImageEntry(file.id, item));
         setImageEntries(items);
-        setFiles(prev =>
-          prev.map(item =>
-            item.id === file.id
-              ? {
-                  ...item,
-                  status: 'completed',
-                  imageCount: response.count ?? items.length,
-                  processedCount: 0,
-                }
-              : item,
-          ),
-        );
-        if (resetSelection && items.length > 0) {
-          setSelectedImageId(items[0].id);
-        }
-        addLog('info', `预览完成：${file.name}（${items.length} 张图像）`);
+        setFiles(prev => prev.map(item => item.id === file.id
+          ? { ...item, title: response.title ?? item.title, status: 'completed', imageCount: response.count ?? items.length, processedCount: 0 }
+          : item,
+        ));
+        if (resetSelection && items.length > 0) setSelectedImageId(items[0].id);
+        appendBackendLogs(response.logs, file.name);
+        addLog('info', `预览完成：${file.name}（${items.length} 张）`);
       } catch (error) {
         addLog('error', `预览失败：${(error as Error).message}`);
-        setFiles(prev =>
-          prev.map(item =>
-            item.id === file.id ? { ...item, status: 'error' } : item,
-          ),
-        );
+        setFiles(prev => prev.map(item => item.id === file.id ? { ...item, status: 'error' } : item));
       } finally {
         setIsProcessing(false);
       }
     },
-    [
-      activeAIPreset,
-      activeNamingPreset,
-      activeRuntimePreset,
-      addLog,
-      backendReachable,
-      client,
-      language,
-    ],
+    [appendBackendLogs, backendReachable, client, activeAIPreset, activeNamingPreset, activeRuntimePreset, language, addLog],
   );
 
-  useEffect(() => {
-    if (lastError) {
-      addLog('warning', `后端连接失败：${lastError}`);
-    } else if (backendReachable) {
-      addLog('info', `后端已连接：${client.baseUrl()}`);
+  // 文件列表相关处理
+  const handleAddFiles = useCallback((incoming: File[]) => {
+    if (!incoming || incoming.length === 0) return;
+    const mdFiles = incoming.filter(f => f.name.endsWith('.md') || f.name.endsWith('.markdown'));
+    if (mdFiles.length === 0) {
+      addLog('warning', '未检测到 Markdown 文件。');
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [backendReachable, lastError]);
+    const timestamp = Date.now();
+    const newItems = mdFiles.map((f, i) => createMarkdownFileDescriptor(f, `${timestamp}-${i}`));
+    const existing = new Set(files.map(it => it.path));
+    const deduped = newItems.filter(it => !existing.has(it.path));
+    if (deduped.length === 0) {
+      addLog('info', '这些文件已经在列表中，无需重复添加。');
+      return;
+    }
+    setFiles(prev => [...prev, ...deduped]);
+    setSelectedFileId(deduped[0].id);
+    setSelectedImageId(null);
+    setReviewOpen(false);
+    void loadImageEntriesForFile(deduped[0], true);
+  }, [files, addLog, loadImageEntriesForFile]);
 
-  const handleAddFiles = useCallback(
-    (incomingFiles: File[]) => {
-      const timestamp = Date.now();
-      const markdownFiles = incomingFiles
-        .filter(file => file.name.endsWith('.md') || file.name.endsWith('.markdown'))
-        .map((file, idx) =>
-          createMarkdownFileDescriptor(file, `file-${timestamp}-${idx}`),
-        );
-
-      if (markdownFiles.length === 0) {
-        addLog('warning', '未找到 Markdown 文件');
-        return;
-      }
-
-      setFiles(prev => [...prev, ...markdownFiles]);
-      addLog('info', `导入 ${markdownFiles.length} 个 Markdown 文件`);
-
-      const firstFile = markdownFiles[0];
-      if (!selectedFileId) {
-        setSelectedFileId(firstFile.id);
-      }
-      void loadImageEntriesForFile(firstFile, true);
-    },
-    [addLog, loadImageEntriesForFile, selectedFileId],
-  );
-
-  const handleRemoveFiles = (fileIds: string[]) => {
-    setFiles(prev => prev.filter(f => !fileIds.includes(f.id)));
-    if (fileIds.includes(selectedFileId || '')) {
+  const handleRemoveFiles = useCallback((ids: string[]) => {
+    if (!ids || ids.length === 0) return;
+    setFiles(prev => prev.filter(f => !ids.includes(f.id)));
+    if (ids.includes(selectedFileId ?? '')) {
       setSelectedFileId(null);
       setImageEntries([]);
+      setSelectedImageId(null);
+      setReviewOpen(false);
     }
-    addLog('info', `Removed ${fileIds.length} file(s)`);
-  };
+  }, [selectedFileId]);
 
-  const handleClearAll = () => {
+  const handleClearAll = useCallback(() => {
     setFiles([]);
     setSelectedFileId(null);
     setImageEntries([]);
-    addLog('info', 'Cleared all files');
-  };
+    setSelectedImageId(null);
+    setReviewOpen(false);
+  }, []);
 
-  const handleSelectFile = (fileId: string) => {
+  const handleSelectFile = useCallback((fileId: string) => {
     setSelectedFileId(fileId);
+    setSelectedImageId(null);
+    setReviewOpen(false);
     const file = files.find(f => f.id === fileId);
-    void loadImageEntriesForFile(file, true);
-  };
+    if (file) void loadImageEntriesForFile(file);
+  }, [files, loadImageEntriesForFile]);
 
-  const handleBatchPreview = () => {
+  // 列表编辑
+  const handleUpdateIntent = useCallback((imageId: string, intent: string) => {
+    setImageEntries(prev => prev.map(e => e.id === imageId ? { ...e, intent } : e));
+  }, []);
+  const handleToggleSkip = useCallback((imageId: string) => {
+    setImageEntries(prev => prev.map(e => e.id === imageId ? { ...e, skipped: !e.skipped } : e));
+  }, []);
+  const handleSelectImage = useCallback((imageId: string) => {
+    setSelectedImageId(imageId);
+    setReviewOpen(true);
+  }, []);
+
+  const handleSetCandidates = useCallback((imageId: string, cands: CandidateOption[]) => {
+    setImageEntries(prev => prev.map(e => e.id === imageId ? { ...e, candidates: cands } : e));
+  }, []);
+
+  // 顶部与控制条
+  const handleBatchPreview = useCallback(() => {
+    if (selectedFile) void loadImageEntriesForFile(selectedFile, true);
+  }, [selectedFile, loadImageEntriesForFile]);
+  const handleWriteBack = useCallback(() => {
     if (!selectedFile) {
+      addLog('warning', '请选择要写回的 Markdown 文件');
       return;
     }
-    addLog('info', `重新分析：${selectedFile.name}`);
-    void loadImageEntriesForFile(selectedFile, true);
-  };
-
-  const handleUpdateIntent = (imageId: string, intent: string) => {
-    setImageEntries(prev => prev.map(img => 
-      img.id === imageId ? { ...img, intent, finalName: img.finalName || intent } : img
-    ));
-  };
-
-  const handleToggleSkip = (imageId: string) => {
-    setImageEntries(prev => prev.map(img => 
-      img.id === imageId ? { ...img, skipped: !img.skipped } : img
-    ));
-  };
-
-  const handleWriteBack = useCallback(async () => {
-    if (!selectedFile) {
-      addLog('warning', '请先选择文件');
-      return;
-    }
-    if (!backendReachable) {
-      addLog('warning', '后端未连接，无法写回');
+    if (imageEntries.length === 0) {
+      addLog('warning', '当前文件没有可写回的图片条目');
       return;
     }
 
-    const chosenMap = imageEntries.reduce<Record<number, string>>((acc, entry) => {
-      if (!entry.skipped) {
-        const name = entry.finalName?.trim() || entry.intent?.trim();
-        if (name) {
-          acc[entry.index] = name;
-        }
-      }
-      return acc;
-    }, {});
-    const skipIndexes = imageEntries.filter(entry => entry.skipped).map(entry => entry.index);
-
-    if (Object.keys(chosenMap).length === 0) {
-      addLog('warning', '没有可写回的命名结果');
-      return;
-    }
-
-    const payload = buildPreviewPayload(
-      selectedFile,
-      activeAIPreset,
-      activeNamingPreset,
-      activeRuntimePreset,
-      language,
-    );
+    const payload = {
+      ...buildPreviewPayload(
+        selectedFile,
+        activeAIPreset,
+        activeNamingPreset,
+        activeRuntimePreset,
+        language,
+      ),
+      chosen_map: Object.fromEntries(
+        imageEntries
+          .filter((e) => !e.skipped)
+          .map((e) => {
+            const intent = (e.intent || e.finalName || '').trim();
+            return [e.index, intent];
+          }),
+      ),
+      skip_indexes: imageEntries.filter((e) => e.skipped).map((e) => e.index),
+    };
 
     setIsProcessing(true);
-    addLog('info', `写回 ${Object.keys(chosenMap).length} 个命名到 ${selectedFile.name}`);
-
-    try {
-      await client.applyDocument({
-        ...payload,
-        chosen_map: chosenMap,
-        skip_indexes: skipIndexes,
-      });
-      addLog('info', '写回完成');
-    } catch (error) {
-      addLog('error', `写回失败：${(error as Error).message}`);
-    } finally {
-      setIsProcessing(false);
-    }
+    addLog('info', `开始写回：${selectedFile.name}`);
+    client
+      .applyDocument(payload)
+      .then((resp) => {
+        appendBackendLogs(resp.logs, selectedFile.name);
+        const applied = new Set(resp.applied || []);
+        setImageEntries((prev) =>
+          prev.map((e) =>
+            applied.has(e.index) ? { ...e, status: 'completed', skipped: false } : e,
+          ),
+        );
+        addLog('info', `写回完成：${selectedFile.name}`);
+      })
+      .catch((err) => {
+        addLog('error', `写回失败：${(err as Error).message}`);
+      })
+      .finally(() => setIsProcessing(false));
   }, [
+    selectedFile,
+    imageEntries,
+    client,
     activeAIPreset,
     activeNamingPreset,
     activeRuntimePreset,
-    addLog,
-    backendReachable,
-    client,
-    imageEntries,
     language,
-    selectedFile,
+    addLog,
+    appendBackendLogs,
   ]);
+  const handleShowFindReplace = useCallback(() => setShowFindReplace(true), []);
+  const handleCloseFindReplace = useCallback(() => setShowFindReplace(false), []);
+  const handleLanguageChange = useCallback((lang: 'zh' | 'en') => setLanguage(lang), []);
+  const handleStopProcessing = useCallback(() => {
+    setIsProcessing(false);
+    addLog('warning', '已尝试停止任务（后端取消逻辑待实现）。');
+  }, [addLog]);
+  const handleOpenSettings = useCallback(() => setSettingsPanelOpen(true), []);
+  const handleCloseSettings = useCallback(() => setSettingsPanelOpen(false), []);
+
+  // 单图复审
+  const handleReviewClose = useCallback(() => setReviewOpen(false), []);
+  const handleReviewApply = useCallback((newName: string) => {
+    if (!selectedImage) return;
+    setImageEntries(prev => prev.map(e => e.id === selectedImage.id ? { ...e, finalName: newName, intent: newName, status: 'completed', skipped: false } : e));
+    setReviewOpen(false);
+  }, [selectedImage]);
+  const handleReviewSkip = useCallback(() => { if (selectedImage) handleToggleSkip(selectedImage.id); }, [handleToggleSkip, selectedImage]);
+  const handleReviewNext = useCallback(() => { if (nextImage) setSelectedImageId(nextImage.id); else setReviewOpen(false); }, [nextImage]);
+  const handleReviewPrevious = useCallback(() => { if (previousImage) setSelectedImageId(previousImage.id); }, [previousImage]);
+
+  // 后端健康日志
+  useEffect(() => { if (lastError) addLog('warning', `后端连接失败：${lastError}`); }, [lastError, addLog]);
+
+  // 同步文件统计
+  useEffect(() => {
+    if (!selectedFileId) return;
+    const processed = imageEntries.filter(e => e.status === 'completed' && !e.skipped).length;
+    const total = imageEntries.length;
+    setFiles(prev => prev.map(it => it.id === selectedFileId ? { ...it, processedCount: processed, imageCount: total || it.imageCount } : it));
+  }, [imageEntries, selectedFileId]);
 
   return (
-    <div className="h-screen flex flex-col bg-background">
+    <div className="flex h-screen flex-col">
       <AppBar
         language={language}
-        onLanguageChange={setLanguage}
-        onOpenSettings={() => setSettingsPanelOpen(true)}
+        onLanguageChange={handleLanguageChange}
+        onOpenSettings={handleOpenSettings}
         isProcessing={isProcessing}
         currentFile={selectedFile?.name}
         aiPresets={presets.ai}
@@ -445,7 +511,7 @@ export default function App() {
         onRuntimePresetChange={setSelectedRuntimePresetId}
       />
 
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex flex-1 overflow-hidden">
         <FileList
           files={files}
           selectedFileId={selectedFileId}
@@ -456,90 +522,67 @@ export default function App() {
           language={language}
         />
 
-        <ProcessingArea
-          file={selectedFile}
-          imageEntries={imageEntries}
-          onBatchPreview={handleBatchPreview}
-          onWriteBack={() => {
-            void handleWriteBack();
-          }}
-          onUpdateIntent={handleUpdateIntent}
-          onToggleSkip={handleToggleSkip}
-          onSelectImage={setSelectedImageId}
-          onShowFindReplace={() => setShowFindReplace(true)}
-          onOpenSettings={() => setSettingsPanelOpen(true)}
-          isProcessing={isProcessing}
-          language={language}
-          presets={presets}
-          selectedAIPresetId={selectedAIPresetId}
-          selectedNamingPresetId={selectedNamingPresetId}
-          selectedRuntimePresetId={selectedRuntimePresetId}
-          onSelectAIPreset={setSelectedAIPresetId}
-          onSelectNamingPreset={setSelectedNamingPresetId}
-          onSelectRuntimePreset={setSelectedRuntimePresetId}
-        />
-      </div>
+        <div className="flex flex-1 flex-col">
+          <ProcessingArea
+            file={selectedFile}
+            imageEntries={imageEntries}
+            onBatchPreview={handleBatchPreview}
+            onWriteBack={handleWriteBack}
+            onUpdateIntent={handleUpdateIntent}
+            onToggleSkip={handleToggleSkip}
+            onSetCandidates={handleSetCandidates}
+            onSelectImage={handleSelectImage}
+            onShowFindReplace={handleShowFindReplace}
+            onOpenSettings={handleOpenSettings}
+            isProcessing={isProcessing}
+            language={language}
+            presets={presets}
+            selectedAIPresetId={selectedAIPresetId}
+            selectedNamingPresetId={selectedNamingPresetId}
+            selectedRuntimePresetId={selectedRuntimePresetId}
+            onSelectAIPreset={setSelectedAIPresetId}
+            onSelectNamingPreset={setSelectedNamingPresetId}
+            onSelectRuntimePreset={setSelectedRuntimePresetId}
+          />
 
-      <LogPanel
-        logs={logs}
-        isProcessing={isProcessing}
-        onStop={() => setIsProcessing(false)}
-        language={language}
-      />
+          {showFindReplace && (
+            <FindReplaceBar onClose={handleCloseFindReplace} language={language} />
+          )}
+
+          <LogPanel
+            logs={logs}
+            isProcessing={isProcessing}
+            onStop={handleStopProcessing}
+            language={language}
+          />
+        </div>
+      </div>
 
       {selectedImage && (
         <ImageReviewPanel
           image={selectedImage}
-          isOpen={!!selectedImage}
-          onClose={() => setSelectedImageId(null)}
-          onApply={(newName) => {
-            setImageEntries(prev => prev.map(img => 
-              img.id === selectedImage.id ? { ...img, finalName: newName } : img
-            ));
-            setSelectedImageId(null);
-          }}
-          onSkip={() => {
-            handleToggleSkip(selectedImage.id);
-            setSelectedImageId(null);
-          }}
-          onNext={() => {
-            const currentIdx = imageEntries.findIndex(img => img.id === selectedImage.id);
-            if (currentIdx < imageEntries.length - 1) {
-              setSelectedImageId(imageEntries[currentIdx + 1].id);
-            }
-          }}
-          onPrevious={() => {
-            const currentIdx = imageEntries.findIndex(img => img.id === selectedImage.id);
-            if (currentIdx > 0) {
-              setSelectedImageId(imageEntries[currentIdx - 1].id);
-            }
-          }}
+          isOpen={reviewOpen}
+          onClose={() => setReviewOpen(false)}
+          onApply={handleReviewApply}
+          onSkip={handleReviewSkip}
+          onNext={handleReviewNext}
+          onPrevious={handleReviewPrevious}
           language={language}
+          documentTitle={selectedFile?.title || selectedFile?.name || ''}
+          aiPreset={activeAIPreset}
+          runtimePreset={activeRuntimePreset}
+          onUpdateCandidates={(imageId, cands) => handleSetCandidates(imageId, cands)}
           totalImages={imageEntries.length}
-          previousImage={(() => {
-            const currentIdx = imageEntries.findIndex(img => img.id === selectedImage.id);
-            return currentIdx > 0 ? imageEntries[currentIdx - 1] : undefined;
-          })()}
-          nextImage={(() => {
-            const currentIdx = imageEntries.findIndex(img => img.id === selectedImage.id);
-            return currentIdx < imageEntries.length - 1 ? imageEntries[currentIdx + 1] : undefined;
-          })()}
-        />
-      )}
-
-      {showFindReplace && (
-        <FindReplaceBar
-          onClose={() => setShowFindReplace(false)}
-          language={language}
+          previousImage={previousImage}
+          nextImage={nextImage}
         />
       )}
 
       <SettingsPanel
         isOpen={settingsPanelOpen}
-        onClose={() => setSettingsPanelOpen(false)}
+        onClose={handleCloseSettings}
         language={language}
       />
-
       <Toaster />
     </div>
   );

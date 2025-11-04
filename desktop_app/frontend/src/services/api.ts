@@ -1,3 +1,10 @@
+import type {
+  BackendApplyResponse,
+  BackendCandidateResponse,
+  BackendLogEntry,
+  BackendPreviewResponse,
+} from "@desktop/types/backend";
+
 const DEFAULT_BASE_URL = "http://127.0.0.1:8000";
 
 const API_BASE =
@@ -80,29 +87,29 @@ export const apiClient = {
     });
   },
 
-  async previewDocument<T = unknown>(payload: PreviewRequestPayload): Promise<T> {
-    return request<T>("/api/v1/documents/preview", {
+  async previewDocument(payload: PreviewRequestPayload): Promise<BackendPreviewResponse> {
+    return request<BackendPreviewResponse>("/api/v1/documents/preview", {
       method: "POST",
       body: JSON.stringify(payload),
     });
   },
 
-  async generateCandidates<T = unknown>(payload: Record<string, unknown>): Promise<T> {
-    return request<T>("/api/v1/candidates", {
+  async generateCandidates(payload: Record<string, unknown>): Promise<BackendCandidateResponse> {
+    return request<BackendCandidateResponse>("/api/v1/candidates", {
       method: "POST",
       body: JSON.stringify(payload),
     });
   },
 
-  async applyDocument<T = unknown>(payload: ApplyRequestPayload): Promise<T> {
-    return request<T>("/api/v1/documents/apply", {
+  async applyDocument(payload: ApplyRequestPayload): Promise<BackendApplyResponse> {
+    return request<BackendApplyResponse>("/api/v1/documents/apply", {
       method: "POST",
       body: JSON.stringify(payload),
     });
   },
 
-  async processText(payload: Record<string, unknown>): Promise<{ result: string }> {
-    return request("/api/v1/text/process", {
+  async processText(payload: Record<string, unknown>): Promise<{ result: string; logs?: BackendLogEntry[] }> {
+    return request<{ result: string; logs?: BackendLogEntry[] }>("/api/v1/text/process", {
       method: "POST",
       body: JSON.stringify(payload),
     });

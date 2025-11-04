@@ -13,7 +13,8 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from dataclasses import asdict, is_dataclass
+from typing import Any, Dict, List, Optional, Set
 
 from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
@@ -64,6 +65,133 @@ TEMPLATE_PRESETS_PATH = TOOL_DIR / "ai_image_intent_namer_gui.templates.json"
 DEFAULT_ATTACH_DIR = "attachments"
 DEFAULT_NAME_TEMPLATE = "{title}_{index:02d}_{intent}"
 
+# ---------------------------------------------------------------------------
+# Logging helpers
+# ---------------------------------------------------------------------------
+
+class LogCollector:
+    """Collects structured log entries emitted during long running tasks."""
+
+    def __init__(self) -> None:
+        self._entries: List[Dict[str, Any]] = []
+
+    def _append(self, level: str, message: str, extra: Optional[Dict[str, Any]] = None) -> None:
+        entry: Dict[str, Any] = {
+            "level": level,
+            "message": message,
+            "ts": time.time(),
+        }
+        if extra:
+            entry["extra"] = extra
+        self._entries.append(entry)
+
+    def info(self, message: str) -> None:
+        self._append("info", message)
+
+    def error(self, message: str) -> None:
+        self._append("error", message)
+
+    # Config callback adapters ------------------------------------------------
+
+    def progress_cb(self, message: str) -> None:
+        self.info(message)
+
+    def llm_event_cb(self, event: Dict[str, Any]) -> None:
+        summary = f"llm:{event.get('mode', 'unknown')}:{event.get('event', 'update')}"
+        if event.get("indexes"):
+            summary += f" idx={event['indexes']}"
+        status = event.get("status")
+        if status:
+            summary += f" status={status}"
+        self._append("debug", summary, event)
+
+    def batch_result_cb(self, payload: Dict[str, Any]) -> None:
+        count = len(payload.get("items", [])) if isinstance(payload.get("items"), list) else 0
+        self._append("info", f"batch completed with {count} item(s)", payload)
+
+    def batch_confirm_cb(self, batch: List[Dict[str, Any]]) -> bool:
+        self._append("debug", f"confirming batch of {len(batch or [])} item(s)")
+        return True
+
+    # ------------------------------------------------------------------
+
+    def export(self) -> List[Dict[str, Any]]:
+        return self._entries
+
+
+def _as_item_dict(item: Any) -> Optional[Dict[str, Any]]:
+    if item is None:
+        return None
+    if is_dataclass(item):
+        return asdict(item)
+    if isinstance(item, dict):
+        return dict(item)
+    return None
+
+
+def _normalize_candidates(candidates: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    if not candidates:
+        return normalized
+    for cand in candidates:
+        if not isinstance(cand, dict):
+            continue
+        normalized.append(
+            {
+                "name": cand.get("title") or cand.get("name") or "",
+                "strategy": cand.get("strategy"),
+                "reason": cand.get("reason") or "",
+                "confidence": cand.get("confidence", 0.0),
+            }
+        )
+    return normalized
+
+
+def _serialize_item(raw_item: Any) -> Optional[Dict[str, Any]]:
+    item = _as_item_dict(raw_item)
+    if not item:
+        return None
+    serialized: Dict[str, Any] = {
+        "index": item.get("index"),
+        "kind": item.get("kind"),
+        "src": item.get("src"),
+        "display_name": item.get("display_name") or item.get("suggested_name"),
+        "block_index": item.get("block_index"),
+        "image_index": item.get("image_index"),
+        "normalized_title": item.get("normalized_title"),
+        "suggested_name": item.get("suggested_name"),
+        "best": item.get("best"),
+        "request_mode": item.get("request_mode"),
+        "ai_error": item.get("ai_error"),
+        "ai_raw": item.get("ai_raw"),
+        "above_text": item.get("above_text") or "",
+        "below_text": item.get("below_text") or "",
+        "between_text": item.get("between_text") or "",
+        "explicit_refs": item.get("explicit_refs") or [],
+        "alt": item.get("alt"),
+        "title_attr": item.get("title_attr"),
+    }
+    serialized["candidates"] = _normalize_candidates(item.get("candidates"))
+    return serialized
+
+
+def _serialize_preview_result(result: Dict[str, Any], logs: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    items = [
+        item
+        for item in (
+            _serialize_item(raw_item) for raw_item in result.get("items", [])
+        )
+        if item is not None
+    ]
+    payload: Dict[str, Any] = {
+        "document": result.get("document"),
+        "title": result.get("title"),
+        "count": result.get("count", len(items)),
+        "items": items,
+    }
+    if logs:
+        payload["logs"] = logs
+    return payload
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
@@ -164,9 +292,13 @@ app.add_middleware(
 
 
 def _config_from_request(
-    mode: str, ai: AISettings, naming: NamingSettings, runtime: RuntimeSettings
+    mode: str,
+    ai: AISettings,
+    naming: NamingSettings,
+    runtime: RuntimeSettings,
+    log_collector: Optional[LogCollector] = None,
 ) -> Config:
-    return Config(
+    cfg = Config(
         mode=mode,
         strategy=naming.strategy,
         base_url=ai.base_url.strip(),
@@ -188,6 +320,12 @@ def _config_from_request(
         intent_language=naming.intent_language,
         reason_language=naming.reason_language,
     )
+    if log_collector:
+        cfg.progress_cb = log_collector.progress_cb
+        cfg.llm_event_cb = log_collector.llm_event_cb
+        cfg.batch_result_cb = log_collector.batch_result_cb
+        cfg.batch_confirm_cb = log_collector.batch_confirm_cb
+    return cfg
 
 
 def _ensure_markdown_exists(path: Path) -> Path:
@@ -273,14 +411,21 @@ def delete_template(template_name: str) -> Dict:
 @app.post("/api/v1/documents/preview")
 async def preview_document(payload: PreviewRequest) -> Dict:
     md_path = _ensure_markdown_exists(payload.md_path)
+    log_collector = LogCollector()
     cfg = _config_from_request(
-        mode="dry-run", ai=payload.ai, naming=payload.naming, runtime=payload.runtime
+        mode="dry-run",
+        ai=payload.ai,
+        naming=payload.naming,
+        runtime=payload.runtime,
+        log_collector=log_collector,
     )
     try:
         result = await run_in_threadpool(process_document, md_path, cfg)
     except Exception as exc:
+        log_collector.error(str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return result
+    serialized = _serialize_preview_result(result, log_collector.export())
+    return serialized
 
 
 @app.post("/api/v1/candidates")
@@ -320,7 +465,11 @@ async def generate_candidates(payload: CandidateRequest) -> Dict:
                 status_code=502,
                 detail="LLM response did not contain valid candidates",
             )
-        return result
+        return {
+            "normalized_title": result.get("normalized_title"),
+            "best": result.get("best"),
+            "candidates": _normalize_candidates(result.get("candidates")),
+        }
     except HTTPException:
         raise
     except Exception as exc:
@@ -329,6 +478,8 @@ async def generate_candidates(payload: CandidateRequest) -> Dict:
 
 @app.post("/api/v1/text/process")
 async def process_text(payload: TextProcessingRequest) -> Dict:
+    log_collector = LogCollector()
+    log_collector.info("processing text via LLM")
     prompt = payload.prompt_template.format(text=payload.content)
     try:
         response = await run_in_threadpool(
@@ -347,7 +498,7 @@ async def process_text(payload: TextProcessingRequest) -> Dict:
                 status_code=502,
                 detail=get_last_llm_error() or "Empty response from LLM",
             )
-        return {"result": response}
+        return {"result": response, "logs": log_collector.export()}
     except HTTPException:
         raise
     except Exception as exc:
@@ -357,11 +508,17 @@ async def process_text(payload: TextProcessingRequest) -> Dict:
 @app.post("/api/v1/documents/apply")
 async def apply_document(payload: ApplyRequest) -> Dict:
     md_path = _ensure_markdown_exists(payload.md_path)
+    log_collector = LogCollector()
     cfg = _config_from_request(
-        mode="apply", ai=payload.ai, naming=payload.naming, runtime=payload.runtime
+        mode="apply",
+        ai=payload.ai,
+        naming=payload.naming,
+        runtime=payload.runtime,
+        log_collector=log_collector,
     )
 
     def worker() -> Dict:
+        log_collector.info(f"开始写回：{md_path.name}")
         text = read_text(md_path)
         refs = collect_images(text)
         attach_dir = md_path.parent / cfg.attach_dir_name
@@ -404,8 +561,7 @@ async def apply_document(payload: ApplyRequest) -> Dict:
                 save_attachment_plan(attach_dir, plan)
 
         def step_logger(info: Dict) -> None:
-            # The legacy logger used async Tkinter calls; here we just keep a stub
-            pass
+            log_collector.info(f"计划步骤：{info.get('action', 'unknown')} #{info.get('index')} -> {info.get('target')}")
 
         success, mapping_changed = execute_attachment_plan(
             plan,
@@ -435,11 +591,13 @@ async def apply_document(payload: ApplyRequest) -> Dict:
         plan["completed_at"] = time.time()
         save_attachment_plan(attach_dir, plan)
 
+        log_collector.info(f"写回完成：{md_path.name}")
         return {
             "document": str(md_path),
             "updated": True,
             "skip_indexes": sorted(skip_set),
             "applied": sorted(chosen_map.keys()),
+            "logs": log_collector.export(),
         }
 
     try:
@@ -448,6 +606,7 @@ async def apply_document(payload: ApplyRequest) -> Dict:
     except HTTPException:
         raise
     except Exception as exc:
+        log_collector.error(str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 

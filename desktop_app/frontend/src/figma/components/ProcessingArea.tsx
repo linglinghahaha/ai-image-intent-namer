@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useBackend } from '@desktop/hooks/useBackend';
 import { RefreshCw, Save, Search, Upload, Filter, ChevronDown, Settings } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -38,6 +39,7 @@ interface ProcessingAreaProps {
   onWriteBack: () => void;
   onUpdateIntent: (imageId: string, intent: string) => void;
   onToggleSkip: (imageId: string) => void;
+  onSetCandidates: (imageId: string, cands: { name: string; strategy?: string; reason?: string; confidence?: number }[]) => void;
   onSelectImage: (imageId: string) => void;
   onShowFindReplace: () => void;
   onOpenSettings: () => void;
@@ -122,6 +124,7 @@ export function ProcessingArea({
   onWriteBack,
   onUpdateIntent,
   onToggleSkip,
+  onSetCandidates,
   onSelectImage,
   onShowFindReplace,
   onOpenSettings,
@@ -137,6 +140,55 @@ export function ProcessingArea({
 }: ProcessingAreaProps) {
   const text = t[language];
   const [filterMode, setFilterMode] = useState<'all' | 'pending' | 'skipped'>('all');
+  const { client } = useBackend();
+
+  const aiPreset = presets.ai.find(p => p.id === selectedAIPresetId) || presets.ai[0];
+  const runtimePreset = presets.runtime.find(p => p.id === selectedRuntimePresetId) || presets.runtime[0];
+
+  function mapApiConfigToSettings(api: { baseUrl: string; apiKey: string; model: string }) {
+    return {
+      base_url: api.baseUrl,
+      api_key: api.apiKey,
+      model: api.model,
+      timeout: runtimePreset?.timeout ?? 120,
+      max_retries: runtimePreset?.retryCount ?? 3,
+      rate_limit: 0.4,
+      vision: runtimePreset?.vision,
+      batch_size: Math.max(1, runtimePreset?.concurrency ?? 5),
+    } as const;
+  }
+
+  async function handleGenerate(entry: ImageEntry) {
+    if (!file) return;
+    try {
+      const payload = {
+        document_title: (file.title || file.name || '').toString(),
+        above_text: entry.aboveText || '',
+        below_text: entry.belowText || '',
+        between_text: entry.betweenText || '',
+        explicit_refs: entry.explicitRefs || [],
+        alt_text: undefined,
+        title_attr: undefined,
+        vision_src: runtimePreset?.vision ? entry.originalPath : undefined,
+        ai: mapApiConfigToSettings(aiPreset.mainApi),
+        verbose: true,
+      } as const;
+      const resp = await client.generateCandidates(payload as unknown as Record<string, unknown>);
+      const next = (resp.candidates || []).map(c => ({
+        name: c.name || '',
+        strategy: c.strategy,
+        reason: c.reason,
+        confidence: typeof c.confidence === 'number' ? c.confidence : undefined,
+      }));
+      onSetCandidates(entry.id, next);
+      if (resp.normalized_title) {
+        onUpdateIntent(entry.id, resp.normalized_title);
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(e);
+    }
+  }
 
   const filteredEntries = imageEntries.filter(entry => {
     if (filterMode === 'pending') return entry.status === 'pending' || entry.status === 'processing';
@@ -340,6 +392,14 @@ export function ProcessingArea({
                   />
                 </TableCell>
                 <TableCell>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="mr-2"
+                    onClick={() => handleGenerate(entry)}
+                  >
+                    AI
+                  </Button>
                   <Button
                     size="sm"
                     variant="ghost"

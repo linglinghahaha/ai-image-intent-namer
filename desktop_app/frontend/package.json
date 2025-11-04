@@ -2,15 +2,16 @@
   "name": "ai-image-intent-desktop",
   "version": "0.1.0",
   "private": true,
-  "main": "electron/main.ts",
+  "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
     "dev:vite": "vite",
-    "dev:electron": "wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 tsx electron/main.ts",
+    "dev:electron": "wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron electron/main.js",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "lint": "echo \"lint step not configured\"",
-    "package": "npm run build && tsx electron/build.ts"
+    "package": "npm run build && tsx electron/build.ts",
+    "e2e:backend": "node scripts/smoke-backend-check.mjs"
   },
   "dependencies": {
     "@radix-ui/react-accordion": "^1.2.3",
