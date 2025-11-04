@@ -267,6 +267,23 @@ export function SettingsPanel({ isOpen, onClose, language }: SettingsPanelProps)
                           <SelectItem value="sci">{text.naming.strategyOptions.sci}</SelectItem>
                         </SelectContent>
                       </Select>
+                      <Label className="text-xs">{text.naming.intentLanguage}</Label>
+                      <Select value={p.intentLanguage ?? 'auto'} onValueChange={v => up({ intentLanguage: v as 'auto'|'zh'|'en' })}>
+                        <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="auto">{text.naming.languageOptions.auto}</SelectItem>
+                          <SelectItem value="zh">{text.naming.languageOptions.zh}</SelectItem>
+                          <SelectItem value="en">{text.naming.languageOptions.en}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Label className="text-xs">{text.naming.reasonLanguage}</Label>
+                      <Select value={p.reasonLanguage ?? 'zh'} onValueChange={v => up({ reasonLanguage: v as 'zh'|'en' })}>
+                        <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="zh">{text.naming.languageOptions.zh}</SelectItem>
+                          <SelectItem value="en">{text.naming.languageOptions.en}</SelectItem>
+                        </SelectContent>
+                      </Select>
                       <Label className="text-xs">{text.naming.seqWidth}</Label>
                       <Input type="number" value={p.seqWidth} onChange={e => up({ seqWidth: Number(e.target.value) || 0 })} />
                       <Label className="text-xs">{text.naming.maxLength}</Label>

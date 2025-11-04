@@ -135,8 +135,8 @@ function buildPreviewPayload(
       template: namingPreset.template,
       seq_width: namingPreset.seqWidth ?? 2,
       max_name_len: namingPreset.maxLength ?? 80,
-      intent_language: language === 'en' ? 'en' : 'zh',
-      reason_language: language === 'en' ? 'en' : 'zh',
+      intent_language: (namingPreset as any).intentLanguage || 'auto',
+      reason_language: (namingPreset as any).reasonLanguage || (language === 'en' ? 'en' : 'zh'),
     },
     runtime: {
       attach_dir_name: runtimePreset.attachDir || DEFAULT_ATTACH_DIR,

@@ -21,6 +21,8 @@ export interface NamingPreset {
   name: string;
   template: string;
   strategy: 'seq' | 'above' | 'below' | 'vision' | 'hybrid' | 'sci';
+  intentLanguage?: 'auto' | 'zh' | 'en';
+  reasonLanguage?: 'zh' | 'en';
   seqWidth: number;
   separator: string;
   caseSensitive: boolean;
@@ -129,6 +131,8 @@ export const defaultNamingPresets: NamingPreset[] = [
     name: 'Title_Seq_Intent',
     template: '{title}_{seq}_{intent}',
     strategy: 'above',
+    intentLanguage: 'auto',
+    reasonLanguage: 'zh',
     seqWidth: 3,
     separator: '_',
     caseSensitive: false,
@@ -140,6 +144,8 @@ export const defaultNamingPresets: NamingPreset[] = [
     name: 'Seq_Intent',
     template: '{seq}_{intent}',
     strategy: 'seq',
+    intentLanguage: 'auto',
+    reasonLanguage: 'zh',
     seqWidth: 2,
     separator: '_',
     caseSensitive: false,
@@ -150,6 +156,8 @@ export const defaultNamingPresets: NamingPreset[] = [
     name: 'Intent_Only',
     template: '{intent}',
     strategy: 'vision',
+    intentLanguage: 'zh',
+    reasonLanguage: 'zh',
     seqWidth: 0,
     separator: '_',
     caseSensitive: false,
@@ -160,6 +168,8 @@ export const defaultNamingPresets: NamingPreset[] = [
     name: 'Title-Intent',
     template: '{title}-{intent}',
     strategy: 'hybrid',
+    intentLanguage: 'auto',
+    reasonLanguage: 'zh',
     seqWidth: 0,
     separator: '-',
     caseSensitive: false,

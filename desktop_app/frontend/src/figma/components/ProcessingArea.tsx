@@ -3,6 +3,7 @@ import { useBackend } from '@desktop/hooks/useBackend';
 import { RefreshCw, Save, Search, Upload, Filter, ChevronDown, Settings } from 'lucide-react';
 import { i18n } from '../../i18n';
 import { Button } from './ui/button';
+import { useRef } from 'react';
 import { Input } from './ui/input';
 import { Checkbox } from './ui/checkbox';
 import { Badge } from './ui/badge';
@@ -72,6 +73,8 @@ export function ProcessingArea({
   const text = i18n(language).processing;
   const [filterMode, setFilterMode] = useState<'all' | 'pending' | 'skipped'>('all');
   const { client } = useBackend();
+  const importRef = useRef<HTMLInputElement | null>(null);
+  const fileAbsPath = file?.path || '';
   // Thumbnails loader for local/relative images
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
 
@@ -153,7 +156,13 @@ export function ProcessingArea({
         }
         if (window.electronAPI?.readFileAsDataUrl) {
           try {
-            return window.electronAPI.readFileAsDataUrl(src) || undefined;
+            // resolve relative to markdown file
+            const isAbs = /^([a-zA-Z]:\\|\\\\|\/)/.test(src);
+            const sep = fileAbsPath.includes('\\') ? '\\' : '/';
+            const dir = fileAbsPath.replace(/[\\/][^\\/]+$/, '');
+            const normRel = src.replace(/[\\/]+/g, sep);
+            const abs = isAbs ? src : (dir + sep + normRel);
+            return window.electronAPI.readFileAsDataUrl(abs) || undefined;
           } catch {
             return undefined;
           }
@@ -219,6 +228,29 @@ export function ProcessingArea({
             <Upload className="w-4 h-4 mr-2" />
             {text.importIntent}
           </Button>
+          <input ref={importRef} type="file" accept="application/json" className="hidden" onChange={async (e) => {
+            const f = e.target.files?.[0];
+            if (!f) return;
+            try {
+              const txt = await f.text();
+              const obj = JSON.parse(txt) as Record<string, string>;
+              const updates = new Map<string, string>();
+              for (const [k,v] of Object.entries(obj)) {
+                updates.set(k, String(v||''));
+              }
+              imageEntries.forEach((entry) => {
+                const byIndex = updates.get(String(entry.index));
+                const byPath = updates.get(entry.originalPath) || Array.from(updates.keys()).find(key => entry.originalPath.endsWith(key));
+                const picked = byIndex || (byPath ? updates.get(byPath) : undefined);
+                if (picked) onUpdateIntent(entry.id, picked);
+              });
+            } catch (err) {
+              // eslint-disable-next-line no-console
+              console.error('import intents failed', err);
+            } finally {
+              e.currentTarget.value = '';
+            }
+          }} />
           <Button
             size="sm"
             variant="outline"
