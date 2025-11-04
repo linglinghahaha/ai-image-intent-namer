@@ -1,4 +1,4 @@
-import { useState } from 'react';
+﻿import { useState } from 'react';
 import { useBackend } from '@desktop/hooks/useBackend';
 import { RefreshCw, Save, Search, Upload, Filter, ChevronDown, Settings } from 'lucide-react';
 import { i18n } from '../../i18n';
@@ -159,7 +159,7 @@ export function ProcessingArea({
 
   if (!file) {
     return (
-      <div className="flex-1 flex items-center justify-center text-muted-foreground">
+      <div className="flex-1 flex items-center justify-center text-foreground/70">
         <div className="text-center">
           <RefreshCw className="w-16 h-16 mx-auto mb-4 opacity-20" />
           <p>{text.noFile}</p>
@@ -170,100 +170,9 @@ export function ProcessingArea({
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="p-4 border-b bg-card space-y-4">
-        {/* 婵縿鍎甸敓?1: 闁哄倸娲ｅ▎銏ゆ焻婢跺顏?*/}
-        <div>
-          <Label className="text-sm text-muted-foreground mb-2 block">{text.step1}</Label>
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="mb-1">{file.name}</h2>
-              <p className="text-sm text-muted-foreground">
-                {text.total} {file.imageCount} {text.images}
-              </p>
-            </div>
-          </div>
-        </div>
+      <div className="p-3 border-b bg-background space-y-3">\n<Separator />
         
-        <Separator />
-        
-        {/* 婵縿鍎甸敓?2: 濠㈣泛瀚幃濠囧箳瑜嶉崺妤呭矗?*/}
-        <div className="space-y-3">
-          <Label className="text-sm text-muted-foreground">{text.step2}</Label>
-          
-          {/* 濡澘瀚鏇㈡焻婢跺顏ラ敓?*/}
-          <div className="grid grid-cols-3 gap-3">
-            <div className="space-y-1.5">
-              <Label className="text-xs">{text.aiModelPreset}</Label>
-              <Select value={selectedAIPresetId} onValueChange={onSelectAIPreset}>
-                <SelectTrigger className="h-9">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {presets.ai.map(preset => (
-                    <SelectItem key={preset.id} value={preset.id}>
-                      {preset.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            
-            <div className="space-y-1.5">
-              <Label className="text-xs">{text.namingRulesPreset}</Label>
-              <Select value={selectedNamingPresetId} onValueChange={onSelectNamingPreset}>
-                <SelectTrigger className="h-9">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {presets.naming.map(preset => (
-                    <SelectItem key={preset.id} value={preset.id}>
-                      {preset.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            
-            <div className="space-y-1.5">
-              <Label className="text-xs">{text.runtimeOptionsPreset}</Label>
-              <Select value={selectedRuntimePresetId} onValueChange={onSelectRuntimePreset}>
-                <SelectTrigger className="h-9">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {presets.runtime.map(preset => (
-                    <SelectItem key={preset.id} value={preset.id}>
-                      {preset.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          
-          {/* 闁瑰灝绉崇紞鏃堝箰婢舵劖灏?*/}
-          <div className="flex items-center gap-2">
-            <Button
-              onClick={onBatchPreview}
-              disabled={isProcessing}
-              className="flex-1"
-            >
-              <RefreshCw className={`w-4 h-4 mr-2 ${isProcessing ? 'animate-spin' : ''}`} />
-              {text.batchPreview}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={onOpenSettings}
-            >
-              <Settings className="w-4 h-4 mr-2" />
-              {text.openSettings}
-            </Button>
-          </div>
-        </div>
-        
-        <Separator />
-        
-        {/* 閺夊牆鎳庢慨顏堝礉閻旇鍘撮柟绋款樀閿?*/}
+        {/* 闁哄鐗嗛幊搴㈡叏椤忓牆绀夐柣鏃囶嚙閸樻挳鏌熺粙娆炬█闁?*/}
         <div className="flex gap-2">
           <Button size="sm" variant="outline" onClick={onShowFindReplace}>
             <Search className="w-4 h-4 mr-2" />
@@ -305,8 +214,8 @@ export function ProcessingArea({
         </div>
       </div>
 
-      <ScrollArea className="flex-1">
-        <Table>
+      <ScrollArea className="flex-1 bg-background">
+        <Table className="text-foreground">
           <TableHeader>
             <TableRow>
               <TableHead className="w-16">{text.index}</TableHead>
@@ -324,8 +233,8 @@ export function ProcessingArea({
               <TableRow key={entry.id} className={entry.skipped ? 'opacity-50' : ''}>
                 <TableCell>{entry.index}</TableCell>
                 <TableCell>
-                  <div className="w-16 h-16 bg-muted rounded flex items-center justify-center">
-                    <span className="text-xs text-muted-foreground">IMG</span>
+                  <div className="w-16 h-16 bg-background rounded flex items-center justify-center">
+                    <span className="text-xs text-foreground/70">IMG</span>
                   </div>
                 </TableCell>
                 <TableCell className="text-sm">{entry.originalPath}</TableCell>
@@ -377,3 +286,4 @@ export function ProcessingArea({
     </div>
   );
 }
+
