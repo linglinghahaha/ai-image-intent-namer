@@ -43,7 +43,15 @@
       "caseSensitive": "区分大小写",
       "removeSpecialChars": "移除特殊字符",
       "maxLength": "最大长度",
-      "preview": "预览"
+      "preview": "预览",
+      "strategyOptions": {
+        "seq": "纯序号",
+        "above": "按上文",
+        "below": "按下文",
+        "vision": "按图意",
+        "hybrid": "混合",
+        "sci": "科研增强"
+      }
     },
     "runtime": {
       "presetName": "预设名称",
@@ -118,7 +126,15 @@
       "caseSensitive": "Case Sensitive",
       "removeSpecialChars": "Remove Special Chars",
       "maxLength": "Max Length",
-      "preview": "Preview"
+      "preview": "Preview",
+      "strategyOptions": {
+        "seq": "Sequence",
+        "above": "Above",
+        "below": "Below",
+        "vision": "Vision",
+        "hybrid": "Hybrid",
+        "sci": "Scientific"
+      }
     },
     "runtime": {
       "presetName": "Preset Name",

@@ -20,7 +20,7 @@ export interface NamingPreset {
   id: string;
   name: string;
   template: string;
-  strategy: 'context' | 'vision' | 'hybrid';
+  strategy: 'seq' | 'above' | 'below' | 'vision' | 'hybrid' | 'sci';
   seqWidth: number;
   separator: string;
   caseSensitive: boolean;
@@ -128,7 +128,7 @@ export const defaultNamingPresets: NamingPreset[] = [
     id: 'title-seq-intent',
     name: 'Title_Seq_Intent',
     template: '{title}_{seq}_{intent}',
-    strategy: 'context',
+    strategy: 'above',
     seqWidth: 3,
     separator: '_',
     caseSensitive: false,
@@ -139,7 +139,7 @@ export const defaultNamingPresets: NamingPreset[] = [
     id: 'seq-intent',
     name: 'Seq_Intent',
     template: '{seq}_{intent}',
-    strategy: 'context',
+    strategy: 'seq',
     seqWidth: 2,
     separator: '_',
     caseSensitive: false,

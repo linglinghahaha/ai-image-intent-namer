@@ -8,14 +8,14 @@ import { ImageReviewPanel } from './components/ImageReviewPanel';
 import { FindReplaceBar } from './components/FindReplaceBar';
 import { Toaster } from './components/ui/sonner';
 import { usePresets } from './hooks/usePresets';
-import { useBackend } from '@desktop/hooks/useBackend';
+import { useBackend } from '../hooks/useBackend';
 import type {
   BackendApplyResponse,
   BackendCandidateResponse,
   BackendLogEntry,
   BackendPreviewResponse,
   BackendPreviewItem,
-} from '@desktop/types/backend';
+} from '../types/backend';
 import type { APIConfig, AIPreset, NamingPreset, RuntimePreset } from './types/presets';
 
 export interface MarkdownFile {
@@ -74,9 +74,12 @@ export interface LogEntry {
 const DEFAULT_ATTACH_DIR = 'attachments';
 
 const NAMING_STRATEGY_MAP: Record<NamingPreset['strategy'], string> = {
-  context: 'above',
+  seq: 'seq',
+  above: 'above',
+  below: 'below',
   vision: 'intent',
   hybrid: 'hybrid',
+  sci: 'sci',
 };
 
 function resolveAIPreset(presets: AIPreset[], id: string) {
@@ -149,7 +152,7 @@ function toImageEntry(
   item: BackendPreviewItem,
 ): ImageEntry {
   const candidates: CandidateOption[] = Array.isArray(item.candidates)
-    ? item.candidates.map((candidate) => ({
+    ? item.candidates.map((candidate: CandidateOption) => ({
         name: candidate?.name ?? '',
         strategy: candidate?.strategy,
         reason: candidate?.reason,
@@ -218,13 +221,13 @@ export default function App() {
 
   const { client, backendReachable, lastError } = useBackend();
   
-  // 预设管理
+  // 棰勮绠＄悊
   const { presets } = usePresets();
   const [selectedAIPresetId, setSelectedAIPresetId] = useState(() => presets.ai[0]?.id || '');
   const [selectedNamingPresetId, setSelectedNamingPresetId] = useState(() => presets.naming[0]?.id || '');
   const [selectedRuntimePresetId, setSelectedRuntimePresetId] = useState(() => presets.runtime[0]?.id || '');
   
-  // 当预设加载后，更新选中的ID（如果当前ID不存在）
+  // 褰撻璁惧姞杞藉悗锛屾洿鏂伴€変腑鐨処D锛堝鏋滃綋鍓岻D涓嶅瓨鍦級
   useEffect(() => {
     if (presets.ai.length > 0 && !presets.ai.find(p => p.id === selectedAIPresetId)) {
       setSelectedAIPresetId(presets.ai[0].id);
@@ -296,7 +299,7 @@ export default function App() {
           : item,
         ));
         if (resetSelection && fallbackEntries.length > 0) setSelectedImageId(fallbackEntries[0].id);
-        addLog('warning', '后端未连接，使用示例数据。');
+        addLog('warning', 'Backend not reachable, using mock data');
         return;
       }
 
@@ -313,7 +316,7 @@ export default function App() {
 
       try {
         const response = await client.previewDocument(payload);
-        const items = (response.items ?? []).map(item => toImageEntry(file.id, item));
+        const items = (response.items ?? []).map((item: BackendPreviewItem) => toImageEntry(file.id, item));
         setImageEntries(items);
         setFiles(prev => prev.map(item => item.id === file.id
           ? { ...item, title: response.title ?? item.title, status: 'completed', imageCount: response.count ?? items.length, processedCount: 0 }
@@ -321,9 +324,9 @@ export default function App() {
         ));
         if (resetSelection && items.length > 0) setSelectedImageId(items[0].id);
         appendBackendLogs(response.logs, file.name);
-        addLog('info', `预览完成：${file.name}（${items.length} 张）`);
+        addLog('info', `棰勮瀹屾垚锛?{file.name}锛?{items.length} 寮狅級`);
       } catch (error) {
-        addLog('error', `预览失败：${(error as Error).message}`);
+        addLog('error', `棰勮澶辫触锛?{(error as Error).message}`);
         setFiles(prev => prev.map(item => item.id === file.id ? { ...item, status: 'error' } : item));
       } finally {
         setIsProcessing(false);
@@ -332,12 +335,12 @@ export default function App() {
     [appendBackendLogs, backendReachable, client, activeAIPreset, activeNamingPreset, activeRuntimePreset, language, addLog],
   );
 
-  // 文件列表相关处理
+  // 鏂囦欢鍒楄〃鐩稿叧澶勭悊
   const handleAddFiles = useCallback((incoming: File[]) => {
     if (!incoming || incoming.length === 0) return;
     const mdFiles = incoming.filter(f => f.name.endsWith('.md') || f.name.endsWith('.markdown'));
     if (mdFiles.length === 0) {
-      addLog('warning', '未检测到 Markdown 文件。');
+      addLog('warning', 'No Markdown files detected');
       return;
     }
     const timestamp = Date.now();
@@ -345,7 +348,7 @@ export default function App() {
     const existing = new Set(files.map(it => it.path));
     const deduped = newItems.filter(it => !existing.has(it.path));
     if (deduped.length === 0) {
-      addLog('info', '这些文件已经在列表中，无需重复添加。');
+      addLog('info', 'Files already in list');
       return;
     }
     setFiles(prev => [...prev, ...deduped]);
@@ -382,7 +385,7 @@ export default function App() {
     if (file) void loadImageEntriesForFile(file);
   }, [files, loadImageEntriesForFile]);
 
-  // 列表编辑
+  // 鍒楄〃缂栬緫
   const handleUpdateIntent = useCallback((imageId: string, intent: string) => {
     setImageEntries(prev => prev.map(e => e.id === imageId ? { ...e, intent } : e));
   }, []);
@@ -398,17 +401,17 @@ export default function App() {
     setImageEntries(prev => prev.map(e => e.id === imageId ? { ...e, candidates: cands } : e));
   }, []);
 
-  // 顶部与控制条
+  // 椤堕儴涓庢帶鍒舵潯
   const handleBatchPreview = useCallback(() => {
     if (selectedFile) void loadImageEntriesForFile(selectedFile, true);
   }, [selectedFile, loadImageEntriesForFile]);
   const handleWriteBack = useCallback(() => {
     if (!selectedFile) {
-      addLog('warning', '请选择要写回的 Markdown 文件');
+      addLog('warning', '璇烽€夋嫨瑕佸啓鍥炵殑 Markdown 鏂囦欢');
       return;
     }
     if (imageEntries.length === 0) {
-      addLog('warning', '当前文件没有可写回的图片条目');
+      addLog('warning', '褰撳墠鏂囦欢娌℃湁鍙啓鍥炵殑鍥剧墖鏉＄洰');
       return;
     }
 
@@ -432,7 +435,7 @@ export default function App() {
     };
 
     setIsProcessing(true);
-    addLog('info', `开始写回：${selectedFile.name}`);
+    addLog('info', `寮€濮嬪啓鍥烇細${selectedFile.name}`);
     client
       .applyDocument(payload)
       .then((resp) => {
@@ -443,10 +446,10 @@ export default function App() {
             applied.has(e.index) ? { ...e, status: 'completed', skipped: false } : e,
           ),
         );
-        addLog('info', `写回完成：${selectedFile.name}`);
+        addLog('info', `鍐欏洖瀹屾垚锛?{selectedFile.name}`);
       })
       .catch((err) => {
-        addLog('error', `写回失败：${(err as Error).message}`);
+        addLog('error', `鍐欏洖澶辫触锛?{(err as Error).message}`);
       })
       .finally(() => setIsProcessing(false));
   }, [
@@ -465,12 +468,12 @@ export default function App() {
   const handleLanguageChange = useCallback((lang: 'zh' | 'en') => setLanguage(lang), []);
   const handleStopProcessing = useCallback(() => {
     setIsProcessing(false);
-    addLog('warning', '已尝试停止任务（后端取消逻辑待实现）。');
+    addLog('warning', 'Stop requested (backend cancel not implemented)');
   }, [addLog]);
   const handleOpenSettings = useCallback(() => setSettingsPanelOpen(true), []);
   const handleCloseSettings = useCallback(() => setSettingsPanelOpen(false), []);
 
-  // 单图复审
+  // 鍗曞浘澶嶅
   const handleReviewClose = useCallback(() => setReviewOpen(false), []);
   const handleReviewApply = useCallback((newName: string) => {
     if (!selectedImage) return;
@@ -481,10 +484,10 @@ export default function App() {
   const handleReviewNext = useCallback(() => { if (nextImage) setSelectedImageId(nextImage.id); else setReviewOpen(false); }, [nextImage]);
   const handleReviewPrevious = useCallback(() => { if (previousImage) setSelectedImageId(previousImage.id); }, [previousImage]);
 
-  // 后端健康日志
-  useEffect(() => { if (lastError) addLog('warning', `后端连接失败：${lastError}`); }, [lastError, addLog]);
+  // 鍚庣鍋ュ悍鏃ュ織
+  useEffect(() => { if (lastError) addLog('warning', `鍚庣杩炴帴澶辫触锛?{lastError}`); }, [lastError, addLog]);
 
-  // 同步文件统计
+  // 鍚屾鏂囦欢缁熻
   useEffect(() => {
     if (!selectedFileId) return;
     const processed = imageEntries.filter(e => e.status === 'completed' && !e.skipped).length;

@@ -47,8 +47,18 @@ export function SettingsPanel({ isOpen, onClose, language }: SettingsPanelProps)
     const naming: NamingPreset[] = Object.entries(templates || {}).map(([name, val], idx) => {
       const tpl = typeof val === 'string' ? val : (val?.template ?? '{title}_{seq}_{intent}');
       const rawStrategy = (typeof val === 'object' && val) ? (val.strategy ?? val.naming_strategy ?? val.mode) : undefined;
-      const strategyMap: Record<string, NamingPreset['strategy']> = { above: 'context', intent: 'vision', hybrid: 'hybrid', context: 'context', vision: 'vision' };
-      const strategy = strategyMap[String(rawStrategy || 'context').toLowerCase()] || 'context';
+      const strategyMap: Record<string, NamingPreset['strategy']> = {
+        seq: 'seq',
+        above: 'above',
+        below: 'below',
+        between: 'above',
+        intent: 'vision',
+        hybrid: 'hybrid',
+        sci: 'sci',
+        context: 'above',
+        vision: 'vision',
+      };
+      const strategy = strategyMap[String(rawStrategy || 'above').toLowerCase()] || 'above';
       const seqWidth = (typeof val === 'object' && val) ? (val.seq_width ?? val.seqWidth ?? 2) : 2;
       const maxLength = (typeof val === 'object' && val) ? (val.max_name_len ?? val.maxLength ?? 100) : 100;
       const separator = (typeof val === 'object' && val) ? (val.separator ?? '_') : '_';
@@ -249,9 +259,12 @@ export function SettingsPanel({ isOpen, onClose, language }: SettingsPanelProps)
                       <Select value={p.strategy} onValueChange={v => up({ strategy: v as NamingPreset['strategy'] })}>
                         <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="context">context</SelectItem>
-                          <SelectItem value="vision">vision</SelectItem>
-                          <SelectItem value="hybrid">hybrid</SelectItem>
+                          <SelectItem value="seq">{text.naming.strategyOptions.seq}</SelectItem>
+                          <SelectItem value="above">{text.naming.strategyOptions.above}</SelectItem>
+                          <SelectItem value="below">{text.naming.strategyOptions.below}</SelectItem>
+                          <SelectItem value="vision">{text.naming.strategyOptions.vision}</SelectItem>
+                          <SelectItem value="hybrid">{text.naming.strategyOptions.hybrid}</SelectItem>
+                          <SelectItem value="sci">{text.naming.strategyOptions.sci}</SelectItem>
                         </SelectContent>
                       </Select>
                       <Label className="text-xs">{text.naming.seqWidth}</Label>
