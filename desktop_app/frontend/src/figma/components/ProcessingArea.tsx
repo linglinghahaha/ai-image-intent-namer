@@ -1,19 +1,13 @@
 import { useState } from 'react';
 import { useBackend } from '../../hooks/useBackend';
 import { RefreshCw, Save, Search, Upload, Filter, ChevronDown, Settings } from 'lucide-react';
+import { i18n } from '../../i18n';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Checkbox } from './ui/checkbox';
 import { Badge } from './ui/badge';
 import { Label } from './ui/label';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from './ui/table';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -54,39 +48,6 @@ interface ProcessingAreaProps {
   onSelectRuntimePreset: (id: string) => void;
 }
 
-const t = {
-  en: {
-    noFile: "Please select or add a file from the left panel",
-    fileInfo: "File Information",
-    step1: "Step 1: File Selection",
-    step2: "Step 2: Processing Console",
-    aiModelPreset: "AI Model Preset",
-    namingRulesPreset: "Naming Rules Preset",
-    runtimeOptionsPreset: "Runtime Options Preset",
-    openSettings: "Open Settings",
-    batchPreview: "Start Batch Preview",
-    writeBack: "Write Back",
-    findReplace: "Find & Replace",
-    importIntent: "Import Intent",
-    filter: "Filter",
-    all: "All",
-    pending: "Pending",
-    skipped: "Skipped",
-    index: "Index",
-    thumbnail: "Preview",
-    originalPath: "Original Path",
-    intent: "AI Intent",
-    candidates: "Candidates",
-    finalName: "Final Name",
-    skip: "Skip",
-    actions: "Actions",
-    review: "Review",
-    apply: "Apply",
-    images: "images",
-    total: "Total",
-  },
-};
-
 export function ProcessingArea({
   file,
   imageEntries,
@@ -108,7 +69,7 @@ export function ProcessingArea({
   onSelectNamingPreset,
   onSelectRuntimePreset,
 }: ProcessingAreaProps) {
-  const text = t.en;
+  const text = i18n(language).processing;
   const [filterMode, setFilterMode] = useState<'all' | 'pending' | 'skipped'>('all');
   const { client } = useBackend();
 
@@ -210,7 +171,7 @@ export function ProcessingArea({
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="p-4 border-b bg-card space-y-4">
-        {/* 姝ラ�?1: 鏂囦欢閫夋嫨 */}
+        {/* 婵縿鍎甸敓?1: 闁哄倸娲ｅ▎銏ゆ焻婢跺顏?*/}
         <div>
           <Label className="text-sm text-muted-foreground mb-2 block">{text.step1}</Label>
           <div className="flex items-center justify-between">
@@ -225,11 +186,11 @@ export function ProcessingArea({
         
         <Separator />
         
-        {/* 姝ラ�?2: 澶勭悊鎺у埗鍙?*/}
+        {/* 婵縿鍎甸敓?2: 濠㈣泛瀚幃濠囧箳瑜嶉崺妤呭矗?*/}
         <div className="space-y-3">
           <Label className="text-sm text-muted-foreground">{text.step2}</Label>
           
-          {/* 棰勮閫夋嫨�?*/}
+          {/* 濡澘瀚鏇㈡焻婢跺顏ラ敓?*/}
           <div className="grid grid-cols-3 gap-3">
             <div className="space-y-1.5">
               <Label className="text-xs">{text.aiModelPreset}</Label>
@@ -280,7 +241,7 @@ export function ProcessingArea({
             </div>
           </div>
           
-          {/* 鎿嶄綔鎸夐挳 */}
+          {/* 闁瑰灝绉崇紞鏃堝箰婢舵劖灏?*/}
           <div className="flex items-center gap-2">
             <Button
               onClick={onBatchPreview}
@@ -302,7 +263,7 @@ export function ProcessingArea({
         
         <Separator />
         
-        {/* 杈呭姪鍔熻兘鎸夐�?*/}
+        {/* 閺夊牆鎳庢慨顏堝礉閻旇鍘撮柟绋款樀閿?*/}
         <div className="flex gap-2">
           <Button size="sm" variant="outline" onClick={onShowFindReplace}>
             <Search className="w-4 h-4 mr-2" />

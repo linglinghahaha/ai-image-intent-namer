@@ -1,0 +1,142 @@
+{
+  "zh": {
+    "title": "预设管理",
+    "close": "关闭",
+    "nav": {
+      "aiModel": "AI 模型",
+      "namingRules": "命名规则",
+      "runtimeOptions": "运行选项"
+    },
+    "actions": {
+      "selectPreset": "选择预设",
+      "saveAs": "另存为",
+      "duplicate": "复制",
+      "delete": "删除",
+      "reset": "重置全部",
+      "import": "导入",
+      "export": "导出",
+      "save": "保存",
+      "cancel": "取消",
+      "pullFromBackend": "从后端读取",
+      "saveToBackend": "保存到后端"
+    },
+    "ai": {
+      "presetName": "预设名称",
+      "baseUrl": "Base URL",
+      "apiKey": "API Key",
+      "model": "模型",
+      "temperature": "温度",
+      "maxTokens": "最大令牌数",
+      "systemPrompt": "系统提示",
+      "testConnection": "测试连接",
+      "connectionSuccess": "连接成功",
+      "connectionFailed": "连接失败"
+    },
+    "naming": {
+      "presetName": "预设名称",
+      "template": "命名模板",
+      "templatePlaceholder": "例如: {title}_{seq}_{intent}",
+      "availablePlaceholders": "可用占位符",
+      "strategy": "命名策略",
+      "seqWidth": "序号宽度",
+      "separator": "分隔符",
+      "caseSensitive": "区分大小写",
+      "removeSpecialChars": "移除特殊字符",
+      "maxLength": "最大长度",
+      "preview": "预览"
+    },
+    "runtime": {
+      "presetName": "预设名称",
+      "backup": "备份原文",
+      "vision": "启用视觉分析",
+      "attachDir": "Attachments 目录",
+      "concurrency": "并发数",
+      "retryCount": "重试次数",
+      "timeout": "超时时间（秒）",
+      "logLevel": "日志级别",
+      "autoSave": "自动保存"
+    },
+    "tips": {
+      "saved": "预设已保存",
+      "deleted": "预设已删除",
+      "duplicated": "预设已复制",
+      "resetSuccess": "已重置到默认",
+      "importSuccess": "预设已导入",
+      "exportSuccess": "预设已复制到剪贴板",
+      "invalidJson": "无效的 JSON",
+      "backendNotConnected": "后端未连接",
+      "importFailed": "导入失败",
+      "saveFailed": "保存失败"
+    }
+  },
+  "en": {
+    "title": "Preset Manager",
+    "close": "Close",
+    "nav": {
+      "aiModel": "AI Model",
+      "namingRules": "Naming Rules",
+      "runtimeOptions": "Runtime Options"
+    },
+    "actions": {
+      "selectPreset": "Select Preset",
+      "saveAs": "Save As",
+      "duplicate": "Duplicate",
+      "delete": "Delete",
+      "reset": "Reset All",
+      "import": "Import",
+      "export": "Export",
+      "save": "Save",
+      "cancel": "Cancel",
+      "pullFromBackend": "Pull From Backend",
+      "saveToBackend": "Save To Backend"
+    },
+    "ai": {
+      "presetName": "Preset Name",
+      "baseUrl": "Base URL",
+      "apiKey": "API Key",
+      "model": "Model",
+      "temperature": "Temperature",
+      "maxTokens": "Max Tokens",
+      "systemPrompt": "System Prompt",
+      "testConnection": "Test Connection",
+      "connectionSuccess": "Connection successful",
+      "connectionFailed": "Connection failed"
+    },
+    "naming": {
+      "presetName": "Preset Name",
+      "template": "Template",
+      "templatePlaceholder": "e.g. {title}_{seq}_{intent}",
+      "availablePlaceholders": "Placeholders",
+      "strategy": "Strategy",
+      "seqWidth": "Seq Width",
+      "separator": "Separator",
+      "caseSensitive": "Case Sensitive",
+      "removeSpecialChars": "Remove Special Chars",
+      "maxLength": "Max Length",
+      "preview": "Preview"
+    },
+    "runtime": {
+      "presetName": "Preset Name",
+      "backup": "Backup",
+      "vision": "Enable Vision",
+      "attachDir": "Attachments Dir",
+      "concurrency": "Concurrency",
+      "retryCount": "Retry Count",
+      "timeout": "Timeout (s)",
+      "logLevel": "Log Level",
+      "autoSave": "Auto Save"
+    },
+    "tips": {
+      "saved": "Preset saved",
+      "deleted": "Preset deleted",
+      "duplicated": "Preset duplicated",
+      "resetSuccess": "Reset to defaults",
+      "importSuccess": "Presets imported",
+      "exportSuccess": "Presets copied to clipboard",
+      "invalidJson": "Invalid JSON",
+      "backendNotConnected": "Backend not connected",
+      "importFailed": "Import failed",
+      "saveFailed": "Save failed"
+    }
+  }
+}
