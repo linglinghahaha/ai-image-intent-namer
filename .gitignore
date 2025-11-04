@@ -214,3 +214,9 @@ tool/ai_image_intent_namer_gui.profiles.json
 .github/
 diff_temp.txt
 original_*.py
+
+# Frontend build dev cache and deps
+/desktop_app/frontend/node_modules/
+/desktop_app/frontend/.vite/
+/desktop_app/frontend/dist/
+

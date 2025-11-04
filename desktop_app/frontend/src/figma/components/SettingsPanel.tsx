@@ -1,18 +1,25 @@
 import { useState } from 'react';
 import { X, Upload, Download, RotateCcw, Settings as SettingsIcon, FileText, Zap } from 'lucide-react';
 import { Button } from './ui/button';
+import { Input } from './ui/input';
+import { Label } from './ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { Switch } from './ui/switch';
 import { Tabs, TabsList, TabsTrigger } from './ui/tabs';
 import { i18n } from '../../i18n';
-import { usePresets } from '../hooks/usePresets';
-import { useBackend } from '../../hooks/useBackend';
-import type { AIPreset, NamingPreset } from '../types/presets';
+import { usePresets } from '@figma/hooks/usePresets';
+import { useBackend } from '@desktop/hooks/useBackend';
+import type { AIPreset, NamingPreset, RuntimePreset } from '@figma/types/presets';
 
 interface SettingsPanelProps { isOpen: boolean; onClose: () => void; language: 'zh' | 'en'; }
 
 export function SettingsPanel({ isOpen, onClose, language }: SettingsPanelProps) {
   const { client, backendReachable } = useBackend();
-  const { presets, importPresets, resetAllPresets } = usePresets();
+  const { presets, importPresets, resetAllPresets, updateAIPreset, updateNamingPreset, updateRuntimePreset, duplicateAIPreset, duplicateNamingPreset, duplicateRuntimePreset, deleteAIPreset, deleteNamingPreset, deleteRuntimePreset } = usePresets();
   const [activeTab, setActiveTab] = useState<'ai'|'naming'|'runtime'>('ai');
+  const [selectedAiId, setSelectedAiId] = useState<string>(() => presets.ai[0]?.id || '');
+  const [selectedNamingId, setSelectedNamingId] = useState<string>(() => presets.naming[0]?.id || '');
+  const [selectedRuntimeId, setSelectedRuntimeId] = useState<string>(() => presets.runtime[0]?.id || '');
 
   if (!isOpen) return null;
 
@@ -102,7 +109,203 @@ export function SettingsPanel({ isOpen, onClose, language }: SettingsPanelProps)
               <TabsTrigger value="runtime" onClick={() => setActiveTab('runtime')}>{text.nav.runtimeOptions}</TabsTrigger>
             </TabsList>
           </Tabs>
-          <div className="text-sm text-muted-foreground mt-4">Active: {activeTab}</div>
+
+          {/* AI Presets */}
+          {activeTab === 'ai' && (
+            <div className="mt-4 space-y-4">
+              <div className="flex items-end gap-2">
+                <div className="grow">
+                  <Label className="text-xs">{text.actions.selectPreset}</Label>
+                  <Select value={selectedAiId} onValueChange={setSelectedAiId}>
+                    <SelectTrigger className="h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {presets.ai.map(p => (
+                        <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button size="sm" variant="outline" onClick={() => { const np = duplicateAIPreset(selectedAiId); if (np) setSelectedAiId(np.id); }}>
+                  {text.actions.duplicate}
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => { const name = window.prompt(text.ai.presetName); if (name) updateAIPreset(selectedAiId, { name }); }}>
+                  {text.actions.saveAs}
+                </Button>
+                <Button size="sm" variant="destructive" onClick={() => { deleteAIPreset(selectedAiId); setSelectedAiId(presets.ai[0]?.id || ''); }}>
+                  {text.actions.delete}
+                </Button>
+              </div>
+
+              {(() => {
+                const p = presets.ai.find(x => x.id === selectedAiId) as AIPreset | undefined;
+                if (!p) return null;
+                const updateGroup = (group: 'mainApi'|'translationApi'|'summaryApi', field: keyof AIPreset['mainApi'], value: string) => {
+                  updateAIPreset(selectedAiId, { [group]: { ...p[group], [field]: value } } as unknown as Partial<AIPreset>);
+                };
+                return (
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <Label className="text-xs">{text.sections.main}</Label>
+                      <Input value={p.mainApi.baseUrl} onChange={e => updateGroup('mainApi','baseUrl', e.target.value)} placeholder={text.ai.baseUrl} />
+                      <Input value={p.mainApi.apiKey} onChange={e => updateGroup('mainApi','apiKey', e.target.value)} placeholder={text.ai.apiKey} />
+                      <Input value={p.mainApi.model} onChange={e => updateGroup('mainApi','model', e.target.value)} placeholder={text.ai.model} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs">{text.sections.translation}</Label>
+                      <Input value={p.translationApi.baseUrl} onChange={e => updateGroup('translationApi','baseUrl', e.target.value)} placeholder={text.ai.baseUrl} />
+                      <Input value={p.translationApi.apiKey} onChange={e => updateGroup('translationApi','apiKey', e.target.value)} placeholder={text.ai.apiKey} />
+                      <Input value={p.translationApi.model} onChange={e => updateGroup('translationApi','model', e.target.value)} placeholder={text.ai.model} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs">{text.sections.summary}</Label>
+                      <Input value={p.summaryApi.baseUrl} onChange={e => updateGroup('summaryApi','baseUrl', e.target.value)} placeholder={text.ai.baseUrl} />
+                      <Input value={p.summaryApi.apiKey} onChange={e => updateGroup('summaryApi','apiKey', e.target.value)} placeholder={text.ai.apiKey} />
+                      <Input value={p.summaryApi.model} onChange={e => updateGroup('summaryApi','model', e.target.value)} placeholder={text.ai.model} />
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* Naming Presets */}
+          {activeTab === 'naming' && (
+            <div className="mt-4 space-y-4">
+              <div className="flex items-end gap-2">
+                <div className="grow">
+                  <Label className="text-xs">{text.actions.selectPreset}</Label>
+                  <Select value={selectedNamingId} onValueChange={setSelectedNamingId}>
+                    <SelectTrigger className="h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {presets.naming.map(p => (
+                        <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button size="sm" variant="outline" onClick={() => { const np = duplicateNamingPreset(selectedNamingId); if (np) setSelectedNamingId(np.id); }}>{text.actions.duplicate}</Button>
+                <Button size="sm" variant="outline" onClick={() => { const name = window.prompt(text.naming.presetName); if (name) updateNamingPreset(selectedNamingId, { name }); }}>{text.actions.saveAs}</Button>
+                <Button size="sm" variant="destructive" onClick={() => { deleteNamingPreset(selectedNamingId); setSelectedNamingId(presets.naming[0]?.id || ''); }}>{text.actions.delete}</Button>
+              </div>
+              {(() => {
+                const p = presets.naming.find(x => x.id === selectedNamingId) as NamingPreset | undefined;
+                if (!p) return null;
+                const up = (partial: Partial<NamingPreset>) => updateNamingPreset(selectedNamingId, partial);
+                return (
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <Label className="text-xs">{text.naming.presetName}</Label>
+                      <Input value={p.name} onChange={e => up({ name: e.target.value })} />
+                      <Label className="text-xs">{text.naming.template}</Label>
+                      <Input value={p.template} onChange={e => up({ template: e.target.value })} placeholder={text.naming.templatePlaceholder} />
+                      <Label className="text-xs">{text.naming.separator}</Label>
+                      <Input value={p.separator} onChange={e => up({ separator: e.target.value })} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs">{text.naming.strategy}</Label>
+                      <Select value={p.strategy} onValueChange={v => up({ strategy: v as NamingPreset['strategy'] })}>
+                        <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="context">context</SelectItem>
+                          <SelectItem value="vision">vision</SelectItem>
+                          <SelectItem value="hybrid">hybrid</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Label className="text-xs">{text.naming.seqWidth}</Label>
+                      <Input type="number" value={p.seqWidth} onChange={e => up({ seqWidth: Number(e.target.value) || 0 })} />
+                      <Label className="text-xs">{text.naming.maxLength}</Label>
+                      <Input type="number" value={p.maxLength ?? 0} onChange={e => up({ maxLength: Number(e.target.value) || 0 })} />
+                    </div>
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-xs">{text.naming.caseSensitive}</Label>
+                        <Switch checked={p.caseSensitive} onCheckedChange={v => up({ caseSensitive: Boolean(v) })} />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <Label className="text-xs">{text.naming.removeSpecialChars}</Label>
+                        <Switch checked={p.removeSpecialChars} onCheckedChange={v => up({ removeSpecialChars: Boolean(v) })} />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* Runtime Presets */}
+          {activeTab === 'runtime' && (
+            <div className="mt-4 space-y-4">
+              <div className="flex items-end gap-2">
+                <div className="grow">
+                  <Label className="text-xs">{text.actions.selectPreset}</Label>
+                  <Select value={selectedRuntimeId} onValueChange={setSelectedRuntimeId}>
+                    <SelectTrigger className="h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {presets.runtime.map(p => (
+                        <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button size="sm" variant="outline" onClick={() => { const np = duplicateRuntimePreset(selectedRuntimeId); if (np) setSelectedRuntimeId(np.id); }}>{text.actions.duplicate}</Button>
+                <Button size="sm" variant="outline" onClick={() => { const name = window.prompt(text.runtime.presetName); if (name) updateRuntimePreset(selectedRuntimeId, { name }); }}>{text.actions.saveAs}</Button>
+                <Button size="sm" variant="destructive" onClick={() => { deleteRuntimePreset(selectedRuntimeId); setSelectedRuntimeId(presets.runtime[0]?.id || ''); }}>{text.actions.delete}</Button>
+              </div>
+              {(() => {
+                const p = presets.runtime.find(x => x.id === selectedRuntimeId) as RuntimePreset | undefined;
+                if (!p) return null;
+                const up = (partial: Partial<RuntimePreset>) => updateRuntimePreset(selectedRuntimeId, partial);
+                return (
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <Label className="text-xs">{text.runtime.presetName}</Label>
+                      <Input value={p.name} onChange={e => up({ name: e.target.value })} />
+                      <Label className="text-xs">{text.runtime.attachDir}</Label>
+                      <Input value={p.attachDir} onChange={e => up({ attachDir: e.target.value })} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs">{text.runtime.concurrency}</Label>
+                      <Input type="number" value={p.concurrency} onChange={e => up({ concurrency: Number(e.target.value) || 1 })} />
+                      <Label className="text-xs">{text.runtime.retryCount}</Label>
+                      <Input type="number" value={p.retryCount} onChange={e => up({ retryCount: Number(e.target.value) || 0 })} />
+                      <Label className="text-xs">{text.runtime.timeout}</Label>
+                      <Input type="number" value={p.timeout} onChange={e => up({ timeout: Number(e.target.value) || 30 })} />
+                      <Label className="text-xs">{text.runtime.logLevel}</Label>
+                      <Select value={p.logLevel} onValueChange={v => up({ logLevel: v as RuntimePreset['logLevel'] })}>
+                        <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="debug">debug</SelectItem>
+                          <SelectItem value="info">info</SelectItem>
+                          <SelectItem value="warn">warn</SelectItem>
+                          <SelectItem value="error">error</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-xs">{text.runtime.backup}</Label>
+                        <Switch checked={p.backup} onCheckedChange={v => up({ backup: Boolean(v) })} />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <Label className="text-xs">{text.runtime.vision}</Label>
+                        <Switch checked={p.vision} onCheckedChange={v => up({ vision: Boolean(v) })} />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <Label className="text-xs">{text.runtime.autoSave}</Label>
+                        <Switch checked={p.autoSave} onCheckedChange={v => up({ autoSave: Boolean(v) })} />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
         </div>
       </div>
     </div>

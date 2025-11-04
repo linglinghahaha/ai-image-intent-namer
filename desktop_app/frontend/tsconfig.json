@@ -19,7 +19,9 @@
       "@figma/*": ["./src/figma/*"],
       "@desktop/api": ["./src/services/api"],
       "@desktop/hooks": ["./src/hooks"],
-      "@desktop/types": ["./src/types"]
+      "@desktop/hooks/*": ["./src/hooks/*"],
+      "@desktop/types": ["./src/types"],
+      "@desktop/types/*": ["./src/types/*"]
     },
     "types": ["vite/client"]
   },

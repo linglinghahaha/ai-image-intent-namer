@@ -67,6 +67,11 @@
       "backendNotConnected": "后端未连接",
       "importFailed": "导入失败",
       "saveFailed": "保存失败"
+    },
+    "sections": {
+      "main": "主 API",
+      "translation": "翻译 API",
+      "summary": "摘要 API"
     }
   },
   "en": {
@@ -137,6 +142,11 @@
       "backendNotConnected": "Backend not connected",
       "importFailed": "Import failed",
       "saveFailed": "Save failed"
+    },
+    "sections": {
+      "main": "Main API",
+      "translation": "Translation API",
+      "summary": "Summary API"
     }
   }
 }

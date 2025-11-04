@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useBackend } from '../../hooks/useBackend';
+import { useBackend } from '@desktop/hooks/useBackend';
 import { RefreshCw, Save, Search, Upload, Filter, ChevronDown, Settings } from 'lucide-react';
 import { i18n } from '../../i18n';
 import { Button } from './ui/button';
@@ -24,7 +24,7 @@ import {
 import { ScrollArea } from './ui/scroll-area';
 import { Separator } from './ui/separator';
 import type { MarkdownFile, ImageEntry } from '../App';
-import type { Presets } from '../types/presets';
+import type { Presets } from '@figma/types/presets';
 
 interface ProcessingAreaProps {
   file?: MarkdownFile;
@@ -333,7 +333,7 @@ export function ProcessingArea({
                   <Input
                     value={entry.intent}
                     onChange={(e) => onUpdateIntent(entry.id, e.target.value)}
-                    placeholder="AI intent..."
+                    placeholder={text.intent}
                     className="min-w-[200px]"
                     disabled={entry.skipped}
                   />

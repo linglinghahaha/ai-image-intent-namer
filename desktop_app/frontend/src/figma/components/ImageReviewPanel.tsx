@@ -1,12 +1,14 @@
 import { X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Button } from './ui/button';
+import { Badge } from './ui/badge';
+import { ScrollArea } from './ui/scroll-area';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './ui/sheet';
 import type { ImageEntry } from '../App';
 import type { AIPreset, RuntimePreset } from '../types/presets';
-import { useBackend } from '../../hooks/useBackend';
+import { useBackend } from '@desktop/hooks/useBackend';
 import { i18n } from '../../i18n';
 
 interface ImageReviewPanelProps {
@@ -161,6 +163,35 @@ export function ImageReviewPanel({ image, isOpen, onClose, onApply, onSkip, onNe
             <Button variant="outline" onClick={handleTranslate} disabled={translating}>{text.translate}</Button>
             <Button variant="outline" onClick={handleSummarize} disabled={summarizing}>{text.summarize}</Button>
           </div>
+
+          {/* Candidates list with strategy, reason, confidence */}
+          {Array.isArray(image.candidates) && image.candidates.length > 0 && (
+            <div className="space-y-2">
+              <Label>{text.candidateStrategies}</Label>
+              <ScrollArea className="max-h-64 border rounded">
+                <div className="p-2 space-y-2">
+                  {image.candidates.map((c, i) => (
+                    <div key={`${c.name}-${i}`} className="flex items-start justify-between gap-2 p-2 rounded hover:bg-muted/40">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <Badge variant="secondary">{c.strategy || '—'}</Badge>
+                          {typeof c.confidence === 'number' && (
+                            <span className="text-xs text-muted-foreground">{text.confidence}: {Math.round(c.confidence * 100)}%</span>
+                          )}
+                        </div>
+                        <div className="font-medium truncate">{c.name}</div>
+                        {c.reason && <div className="text-xs text-muted-foreground whitespace-pre-wrap">{c.reason}</div>}
+                      </div>
+                      <div className="shrink-0 flex items-center gap-2">
+                        <Button size="sm" variant="outline" onClick={() => setCustomName(c.name)}>Use</Button>
+                        <Button size="sm" onClick={() => { setCustomName(c.name); onApply(c.name); }}>{i18n(language).processing.apply}</Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </div>
+          )}
 
           {(translateResult || summarizing || translating) && (
             <div className="space-y-1">
