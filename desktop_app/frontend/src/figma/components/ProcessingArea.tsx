@@ -274,7 +274,17 @@ export function ProcessingArea({
                     <span className="text-xs text-foreground/70">IMG</span>
                   </div>
                 </TableCell>
-                <TableCell className="text-sm">{entry.originalPath}</TableCell>
+                <TableCell className="text-sm">
+                  <div className="max-w-[520px]">
+                    <Input
+                      readOnly
+                      value={entry.originalPath}
+                      title={entry.originalPath}
+                      onFocus={(e) => e.currentTarget.select()}
+                      className="h-8 bg-background border px-3 overflow-x-auto whitespace-nowrap cursor-text"
+                    />
+                  </div>
+                </TableCell>
                 <TableCell>
                   <Input
                     value={entry.intent}

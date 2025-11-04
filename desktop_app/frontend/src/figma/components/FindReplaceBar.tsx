@@ -38,7 +38,7 @@ export function FindReplaceBar({ onClose, language }: FindReplaceBarProps) {
 
   return (
     <div className="border-t bg-card p-4">
-      <div className="max-w-4xl mx-auto">
+      <div className="w-full">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <Search className="w-4 h-4 text-muted-foreground" />
