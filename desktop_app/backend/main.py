@@ -54,6 +54,8 @@ from ai_image_intent_namer import (  # noqa: E402
     get_last_llm_error,
     process_document,
     extract_doc_title,
+    collect_images_to_attachment,
+    normalize_embedded_html_images,
 )
 
 # ---------------------------------------------------------------------------
@@ -269,6 +271,17 @@ class TextProcessingRequest(BaseModel):
     content: str = Field(..., description="Source text")
     ai: AISettings
     verbose: bool = False
+
+
+class PrefetchRequest(BaseModel):
+    md_path: Path
+    runtime: RuntimeSettings
+    backup: bool = True
+
+
+class NormalizeHtmlRequest(BaseModel):
+    md_path: Path
+    backup: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -607,6 +620,43 @@ async def apply_document(payload: ApplyRequest) -> Dict:
         raise
     except Exception as exc:
         log_collector.error(str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/attachments/prefetch")
+async def prefetch_attachments(payload: PrefetchRequest) -> Dict:
+    md_path = _ensure_markdown_exists(payload.md_path)
+    log_collector = LogCollector()
+    try:
+        log_collector.info("collecting images to attachment dir")
+        stats = await run_in_threadpool(
+            collect_images_to_attachment,
+            md_path,
+            payload.runtime.attach_dir_name or DEFAULT_ATTACH_DIR,
+            payload.runtime.timeout,
+            payload.backup,
+        )
+        return {"ok": True, "stats": stats, "logs": log_collector.export()}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/documents/normalize_html")
+async def normalize_html_images(payload: NormalizeHtmlRequest) -> Dict:
+    md_path = _ensure_markdown_exists(payload.md_path)
+    log_collector = LogCollector()
+    try:
+        text = read_text(md_path)
+        new_text, count = normalize_embedded_html_images(text)
+        updated = False
+        if count > 0 and new_text != text:
+            if payload.backup:
+                backup_path = md_path.with_suffix(md_path.suffix + ".bak")
+                backup_path.write_text(text, encoding="utf-8", newline="\n")
+            write_text_utf8(md_path, new_text)
+            updated = True
+        return {"ok": True, "updated": updated, "count": count, "logs": log_collector.export()}
+    except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 

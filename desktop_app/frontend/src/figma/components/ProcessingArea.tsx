@@ -224,9 +224,25 @@ export function ProcessingArea({
             <Search className="w-4 h-4 mr-2" />
             {text.findReplace}
           </Button>
-          <Button size="sm" variant="outline">
+          <Button size="sm" variant="outline" onClick={() => importRef.current?.click()}>
             <Upload className="w-4 h-4 mr-2" />
             {text.importIntent}
+          </Button>
+          <Button size="sm" variant="outline" onClick={async () => {
+            if (!file) return;
+            try {
+              await client.prefetchAttachments({ md_path: file.path, runtime: { attach_dir_name: 'attachments', timeout: 30 }, backup: true });
+            } catch (e) { /* ignore */ }
+          }}>
+            附件预下载
+          </Button>
+          <Button size="sm" variant="outline" onClick={async () => {
+            if (!file) return;
+            try {
+              await client.normalizeHtml({ md_path: file.path, backup: true });
+            } catch (e) { /* ignore */ }
+          }}>
+            规范化HTML图片
           </Button>
           <input ref={importRef} type="file" accept="application/json" className="hidden" onChange={async (e) => {
             const f = e.target.files?.[0];

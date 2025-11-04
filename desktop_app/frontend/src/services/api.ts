@@ -3,7 +3,7 @@ import type {
   BackendCandidateResponse,
   BackendLogEntry,
   BackendPreviewResponse,
-} from "@desktop/types/backend";
+} from "../types/backend";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:8000";
 
@@ -110,6 +110,18 @@ export const apiClient = {
 
   async processText(payload: Record<string, unknown>): Promise<{ result: string; logs?: BackendLogEntry[] }> {
     return request<{ result: string; logs?: BackendLogEntry[] }>("/api/v1/text/process", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  async prefetchAttachments(payload: { md_path: string; runtime: Record<string, unknown>; backup?: boolean }): Promise<{ ok: boolean; stats: Record<string, unknown>; logs?: BackendLogEntry[] }> {
+    return request<{ ok: boolean; stats: Record<string, unknown>; logs?: BackendLogEntry[] }>("/api/v1/attachments/prefetch", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  async normalizeHtml(payload: { md_path: string; backup?: boolean }): Promise<{ ok: boolean; updated: boolean; count: number; logs?: BackendLogEntry[] }> {
+    return request<{ ok: boolean; updated: boolean; count: number; logs?: BackendLogEntry[] }>("/api/v1/documents/normalize_html", {
       method: "POST",
       body: JSON.stringify(payload),
     });
