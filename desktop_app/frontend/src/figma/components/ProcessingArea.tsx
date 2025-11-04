@@ -1,4 +1,4 @@
-﻿import { useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import { useBackend } from '@desktop/hooks/useBackend';
 import { RefreshCw, Save, Search, Upload, Filter, ChevronDown, Settings } from 'lucide-react';
 import { i18n } from '../../i18n';
@@ -72,6 +72,47 @@ export function ProcessingArea({
   const text = i18n(language).processing;
   const [filterMode, setFilterMode] = useState<'all' | 'pending' | 'skipped'>('all');
   const { client } = useBackend();
+  // Thumbnails loader for local/relative images
+  const [thumbs, setThumbs] = useState<Record<string, string>>({});
+
+  function resolveAbsolutePath(mdPath: string, rel: string): string {
+    if (!rel) return rel;
+    // absolute windows (C:\) or UNC (\\) or absolute posix (/)
+    if (/^([a-zA-Z]:\\|\\\\|\/)/.test(rel)) return rel;
+    const sep = mdPath.includes('\\') ? '\\' : '/';
+    const dir = mdPath.replace(/[\\/][^\\/]+$/, '');
+    const normRel = rel.replace(/[\\/]+/g, sep);
+    return dir + sep + normRel;
+  }
+
+  const filteredEntries = useMemo(() => {
+    return imageEntries.filter(entry => {
+      if (filterMode === 'pending') return entry.status === 'pending' || entry.status === 'processing';
+      if (filterMode === 'skipped') return entry.skipped;
+      return true;
+    });
+  }, [imageEntries, filterMode]);
+
+  useEffect(() => {
+    if (!file) return;
+    const isHttp = (s: string) => /^https?:\/\//i.test(s);
+    for (const e of filteredEntries) {
+      if (thumbs[e.id]) continue;
+      const src = e.originalPath || '';
+      if (!src) continue;
+      if (isHttp(src)) {
+        setThumbs(prev => (prev[e.id] ? prev : { ...prev, [e.id]: src }));
+        continue;
+      }
+      if (window.electronAPI?.readFileAsDataUrl) {
+        try {
+          const abs = resolveAbsolutePath(file.path, src);
+          const data = window.electronAPI.readFileAsDataUrl(abs);
+          if (data) setThumbs(prev => ({ ...prev, [e.id]: data }));
+        } catch {}
+      }
+    }
+  }, [file, filteredEntries, thumbs]);
 
   const aiPreset = presets.ai.find(p => p.id === selectedAIPresetId) || presets.ai[0];
   const runtimePreset = presets.runtime.find(p => p.id === selectedRuntimePresetId) || presets.runtime[0];
@@ -151,11 +192,7 @@ export function ProcessingArea({
     }
   }
 
-  const filteredEntries = imageEntries.filter(entry => {
-    if (filterMode === 'pending') return entry.status === 'pending' || entry.status === 'processing';
-    if (filterMode === 'skipped') return entry.skipped;
-    return true;
-  });
+  
 
   if (!file) {
     return (
@@ -286,4 +323,8 @@ export function ProcessingArea({
     </div>
   );
 }
+
+
+
+
 
