@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useBackend } from '@desktop/hooks/useBackend';
+import { useBackend } from '../../hooks/useBackend';
 import { RefreshCw, Save, Search, Upload, Filter, ChevronDown, Settings } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -55,65 +55,35 @@ interface ProcessingAreaProps {
 }
 
 const t = {
-  zh: {
-    noFile: '请从左侧选择或添加文件',
-    fileInfo: '文件信息',
-    step1: '步骤 1: 文件选择',
-    step2: '步骤 2: 处理控制台',
-    aiModelPreset: 'AI 模型预设',
-    namingRulesPreset: '命名规则预设',
-    runtimeOptionsPreset: '运行选项预设',
-    openSettings: '打开设置',
-    batchPreview: '开始批量预览',
-    writeBack: '批量写回',
-    findReplace: '查找替换',
-    importIntent: '导入意图',
-    filter: '过滤',
-    all: '全部',
-    pending: '待确认',
-    skipped: '已跳过',
-    index: '序号',
-    thumbnail: '预览',
-    originalPath: '原始路径',
-    intent: 'AI 意图',
-    candidates: '候选',
-    finalName: '最终命名',
-    skip: '跳过',
-    actions: '操作',
-    review: '复审',
-    apply: '应用',
-    images: '张图片',
-    total: '共',
-  },
   en: {
-    noFile: 'Please select or add a file from the left panel',
-    fileInfo: 'File Information',
-    step1: 'Step 1: File Selection',
-    step2: 'Step 2: Processing Console',
-    aiModelPreset: 'AI Model Preset',
-    namingRulesPreset: 'Naming Rules Preset',
-    runtimeOptionsPreset: 'Runtime Options Preset',
-    openSettings: 'Open Settings',
-    batchPreview: 'Start Batch Preview',
-    writeBack: 'Write Back',
-    findReplace: 'Find & Replace',
-    importIntent: 'Import Intent',
-    filter: 'Filter',
-    all: 'All',
-    pending: 'Pending',
-    skipped: 'Skipped',
-    index: 'Index',
-    thumbnail: 'Preview',
-    originalPath: 'Original Path',
-    intent: 'AI Intent',
-    candidates: 'Candidates',
-    finalName: 'Final Name',
-    skip: 'Skip',
-    actions: 'Actions',
-    review: 'Review',
-    apply: 'Apply',
-    images: 'images',
-    total: 'Total',
+    noFile: "Please select or add a file from the left panel",
+    fileInfo: "File Information",
+    step1: "Step 1: File Selection",
+    step2: "Step 2: Processing Console",
+    aiModelPreset: "AI Model Preset",
+    namingRulesPreset: "Naming Rules Preset",
+    runtimeOptionsPreset: "Runtime Options Preset",
+    openSettings: "Open Settings",
+    batchPreview: "Start Batch Preview",
+    writeBack: "Write Back",
+    findReplace: "Find & Replace",
+    importIntent: "Import Intent",
+    filter: "Filter",
+    all: "All",
+    pending: "Pending",
+    skipped: "Skipped",
+    index: "Index",
+    thumbnail: "Preview",
+    originalPath: "Original Path",
+    intent: "AI Intent",
+    candidates: "Candidates",
+    finalName: "Final Name",
+    skip: "Skip",
+    actions: "Actions",
+    review: "Review",
+    apply: "Apply",
+    images: "images",
+    total: "Total",
   },
 };
 
@@ -138,7 +108,7 @@ export function ProcessingArea({
   onSelectNamingPreset,
   onSelectRuntimePreset,
 }: ProcessingAreaProps) {
-  const text = t[language];
+  const text = t.en;
   const [filterMode, setFilterMode] = useState<'all' | 'pending' | 'skipped'>('all');
   const { client } = useBackend();
 
@@ -161,6 +131,36 @@ export function ProcessingArea({
   async function handleGenerate(entry: ImageEntry) {
     if (!file) return;
     try {
+      const toDataUrl = async (src: string): Promise<string | undefined> => {
+        if (!src) return undefined;
+        const isHttp = /^https?:\/\//i.test(src);
+        if (isHttp) {
+          try {
+            const resp = await fetch(src);
+            const blob = await resp.blob();
+            const b64: string = await new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(String(reader.result));
+              reader.onerror = reject;
+              reader.readAsDataURL(blob);
+            });
+            return b64;
+          } catch {
+            return undefined;
+          }
+        }
+        if (window.electronAPI?.readFileAsDataUrl) {
+          try {
+            return window.electronAPI.readFileAsDataUrl(src) || undefined;
+          } catch {
+            return undefined;
+          }
+        }
+        return undefined;
+      };
+
+      const visionSrc = runtimePreset?.vision ? await toDataUrl(entry.originalPath) : undefined;
+
       const payload = {
         document_title: (file.title || file.name || '').toString(),
         above_text: entry.aboveText || '',
@@ -169,12 +169,12 @@ export function ProcessingArea({
         explicit_refs: entry.explicitRefs || [],
         alt_text: undefined,
         title_attr: undefined,
-        vision_src: runtimePreset?.vision ? entry.originalPath : undefined,
+        vision_src: visionSrc,
         ai: mapApiConfigToSettings(aiPreset.mainApi),
         verbose: true,
       } as const;
       const resp = await client.generateCandidates(payload as unknown as Record<string, unknown>);
-      const next = (resp.candidates || []).map(c => ({
+      const next = (resp.candidates || []).map((c) => ({
         name: c.name || '',
         strategy: c.strategy,
         reason: c.reason,
@@ -210,7 +210,7 @@ export function ProcessingArea({
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="p-4 border-b bg-card space-y-4">
-        {/* 步骤 1: 文件选择 */}
+        {/* 姝ラ�?1: 鏂囦欢閫夋嫨 */}
         <div>
           <Label className="text-sm text-muted-foreground mb-2 block">{text.step1}</Label>
           <div className="flex items-center justify-between">
@@ -225,11 +225,11 @@ export function ProcessingArea({
         
         <Separator />
         
-        {/* 步骤 2: 处理控制台 */}
+        {/* 姝ラ�?2: 澶勭悊鎺у埗鍙?*/}
         <div className="space-y-3">
           <Label className="text-sm text-muted-foreground">{text.step2}</Label>
           
-          {/* 预设选择器 */}
+          {/* 棰勮閫夋嫨�?*/}
           <div className="grid grid-cols-3 gap-3">
             <div className="space-y-1.5">
               <Label className="text-xs">{text.aiModelPreset}</Label>
@@ -280,7 +280,7 @@ export function ProcessingArea({
             </div>
           </div>
           
-          {/* 操作按钮 */}
+          {/* 鎿嶄綔鎸夐挳 */}
           <div className="flex items-center gap-2">
             <Button
               onClick={onBatchPreview}
@@ -302,7 +302,7 @@ export function ProcessingArea({
         
         <Separator />
         
-        {/* 辅助功能按钮 */}
+        {/* 杈呭姪鍔熻兘鎸夐�?*/}
         <div className="flex gap-2">
           <Button size="sm" variant="outline" onClick={onShowFindReplace}>
             <Search className="w-4 h-4 mr-2" />
