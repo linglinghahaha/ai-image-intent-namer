@@ -6,7 +6,7 @@ import { ScrollArea } from './ui/scroll-area';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './ui/sheet';
-import type { ImageEntry } from '../App';
+import type { ImageEntry, CandidateOption } from '../App';
 import type { AIPreset, RuntimePreset } from '../types/presets';
 import { useBackend } from '@desktop/hooks/useBackend';
 import { i18n } from '../../i18n';
@@ -103,14 +103,14 @@ export function ImageReviewPanel({ image, isOpen, onClose, onApply, onSkip, onNe
     if (onUpdateCandidates) onUpdateCandidates(image.id, (resp.candidates || []).map(c => ({ name: c.name || '', strategy: c.strategy, reason: c.reason, confidence: c.confidence })));
   }
 
-  async function handleTranslate() {
+  async function handleTranslate(content?: string) {
     setTranslating(true);
     try {
       const target = language === 'zh' ? 'Chinese' : 'English';
       const prompt_template = `Translate the following text to ${target}:\n\n{text}`;
       const resp = await client.processText({
         prompt_template,
-        content: contextText,
+        content: content ?? contextText,
         ai: mapApiConfigToSettings(aiPreset.translationApi),
         verbose: false,
       });
@@ -120,14 +120,14 @@ export function ImageReviewPanel({ image, isOpen, onClose, onApply, onSkip, onNe
     }
   }
 
-  async function handleSummarize() {
+  async function handleSummarize(content?: string) {
     setSummarizing(true);
     try {
       const target = language === 'zh' ? 'Chinese' : 'English';
       const prompt_template = `Summarize the following text concisely in ${target}:\n\n{text}`;
       const resp = await client.processText({
         prompt_template,
-        content: contextText,
+        content: content ?? contextText,
         ai: mapApiConfigToSettings(aiPreset.summaryApi),
         verbose: false,
       });
@@ -160,8 +160,8 @@ export function ImageReviewPanel({ image, isOpen, onClose, onApply, onSkip, onNe
             <Button onClick={() => { onApply(customName.trim()); onNext(); }}>{text.confirmAndContinue}</Button>
             <Button variant="outline" onClick={() => { onApply(customName.trim()); onClose(); }}>{text.confirmAndClose}</Button>
             <Button variant="outline" onClick={handleGenerate}>AI</Button>
-            <Button variant="outline" onClick={handleTranslate} disabled={translating}>{text.translate}</Button>
-            <Button variant="outline" onClick={handleSummarize} disabled={summarizing}>{text.summarize}</Button>
+            <Button variant="outline" onClick={() => handleTranslate()} disabled={translating}>{text.translate}</Button>
+            <Button variant="outline" onClick={() => handleSummarize()} disabled={summarizing}>{text.summarize}</Button>
           </div>
 
           {/* Candidates list with strategy, reason, confidence */}
@@ -170,7 +170,7 @@ export function ImageReviewPanel({ image, isOpen, onClose, onApply, onSkip, onNe
               <Label>{text.candidateStrategies}</Label>
               <ScrollArea className="max-h-64 border rounded">
                 <div className="p-2 space-y-2">
-                  {image.candidates.map((c, i) => (
+                  {image.candidates.map((c: CandidateOption, i: number) => (
                     <div key={`${c.name}-${i}`} className="flex items-start justify-between gap-2 p-2 rounded hover:bg-muted/40">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
@@ -183,8 +183,13 @@ export function ImageReviewPanel({ image, isOpen, onClose, onApply, onSkip, onNe
                         {c.reason && <div className="text-xs text-muted-foreground whitespace-pre-wrap">{c.reason}</div>}
                       </div>
                       <div className="shrink-0 flex items-center gap-2">
-                        <Button size="sm" variant="outline" onClick={() => setCustomName(c.name)}>Use</Button>
+                        <Button size="sm" variant="outline" onClick={() => setCustomName(c.name)}>{text.use}</Button>
                         <Button size="sm" onClick={() => { setCustomName(c.name); onApply(c.name); }}>{i18n(language).processing.apply}</Button>
+                        <Button size="sm" variant="ghost" onClick={() => handleTranslate(c.name)}>{text.translate}</Button>
+                        <Button size="sm" variant="ghost" onClick={() => handleSummarize(c.reason || c.name)}>{text.summarize}</Button>
+                        {c.reason && (
+                          <Button size="sm" variant="ghost" onClick={async () => { try { await navigator.clipboard.writeText(c.reason || ''); alert(text.copiedToClipboard); } catch { /* ignore */ } }}>{text.copyReason}</Button>
+                        )}
                       </div>
                     </div>
                   ))}

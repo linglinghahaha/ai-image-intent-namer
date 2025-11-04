@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { X, Upload, Download, RotateCcw, Settings as SettingsIcon, FileText, Zap } from 'lucide-react';
 import { Button } from './ui/button';
+import { toast } from 'sonner';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
@@ -45,20 +46,57 @@ export function SettingsPanel({ isOpen, onClose, language }: SettingsPanelProps)
 
     const naming: NamingPreset[] = Object.entries(templates || {}).map(([name, val], idx) => {
       const tpl = typeof val === 'string' ? val : (val?.template ?? '{title}_{seq}_{intent}');
+      const rawStrategy = (typeof val === 'object' && val) ? (val.strategy ?? val.naming_strategy ?? val.mode) : undefined;
+      const strategyMap: Record<string, NamingPreset['strategy']> = { above: 'context', intent: 'vision', hybrid: 'hybrid', context: 'context', vision: 'vision' };
+      const strategy = strategyMap[String(rawStrategy || 'context').toLowerCase()] || 'context';
+      const seqWidth = (typeof val === 'object' && val) ? (val.seq_width ?? val.seqWidth ?? 2) : 2;
+      const maxLength = (typeof val === 'object' && val) ? (val.max_name_len ?? val.maxLength ?? 100) : 100;
+      const separator = (typeof val === 'object' && val) ? (val.separator ?? '_') : '_';
+      const caseSensitive = (typeof val === 'object' && val) ? Boolean(val.case_sensitive ?? val.caseSensitive ?? false) : false;
+      const removeSpecialChars = (typeof val === 'object' && val) ? Boolean(val.remove_special_chars ?? val.removeSpecialChars ?? true) : true;
       return {
         id: `naming-import-${idx}`,
         name,
         template: String(tpl),
-        strategy: 'context',
-        seqWidth: 2,
-        separator: '_',
-        caseSensitive: false,
-        removeSpecialChars: true,
-        maxLength: 100,
+        strategy,
+        seqWidth: Number(seqWidth) || 2,
+        separator: String(separator || '_'),
+        caseSensitive,
+        removeSpecialChars,
+        maxLength: Number(maxLength) || 100,
       } as NamingPreset;
     });
 
     importPresets({ ai, naming });
+  }
+
+  async function handleTestConnection() {
+    try {
+      const p = presets.ai.find(x => x.id === selectedAiId) as AIPreset | undefined;
+      if (!p) return;
+      const resp = await client.processText({
+        prompt_template: 'ping {text}',
+        content: 'hello',
+        ai: {
+          base_url: p.mainApi.baseUrl,
+          api_key: p.mainApi.apiKey,
+          model: p.mainApi.model,
+          timeout: 15,
+          max_retries: 1,
+          rate_limit: 0.5,
+          vision: false,
+          batch_size: 1,
+        },
+        verbose: false,
+      });
+      if (resp && typeof resp.result === 'string') {
+        toast.success(text.ai.connectionSuccess);
+      } else {
+        toast.error(text.ai.connectionFailed);
+      }
+    } catch (e) {
+      toast.error(text.ai.connectionFailed);
+    }
   }
 
   async function handleSaveAllToBackend() {
@@ -136,6 +174,7 @@ export function SettingsPanel({ isOpen, onClose, language }: SettingsPanelProps)
                 <Button size="sm" variant="destructive" onClick={() => { deleteAIPreset(selectedAiId); setSelectedAiId(presets.ai[0]?.id || ''); }}>
                   {text.actions.delete}
                 </Button>
+                <Button size="sm" onClick={handleTestConnection}>{text.ai.testConnection}</Button>
               </div>
 
               {(() => {
