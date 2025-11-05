@@ -1,29 +1,19 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useBackend } from '@desktop/hooks/useBackend';
 import { RefreshCw, Save, Search, Upload, Filter, ChevronDown, Settings } from 'lucide-react';
 import { i18n } from '../../i18n';
-import { Button } from './ui/button';
-import { useRef } from 'react';
+import { toast } from 'sonner';
+
 import { Input } from './ui/input';
 import { Checkbox } from './ui/checkbox';
 import { Badge } from './ui/badge';
 import { Label } from './ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from './ui/dropdown-menu';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from './ui/select';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { ScrollArea } from './ui/scroll-area';
 import { Separator } from './ui/separator';
+
 import type { MarkdownFile, ImageEntry } from '../App';
 import type { Presets } from '@figma/types/presets';
 
@@ -75,13 +65,11 @@ export function ProcessingArea({
   const { client } = useBackend();
   const importRef = useRef<HTMLInputElement | null>(null);
   const fileAbsPath = file?.path || '';
-  // Thumbnails loader for local/relative images
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
 
   function resolveAbsolutePath(mdPath: string, rel: string): string {
     if (!rel) return rel;
-    // absolute windows (C:\) or UNC (\\) or absolute posix (/)
-    if (/^([a-zA-Z]:\\|\\\\|\/)/.test(rel)) return rel;
+    if (/^([a-zA-Z]:\\|\\\\|\/)/.test(rel)) return rel; // absolute windows/UNC/posix
     const sep = mdPath.includes('\\') ? '\\' : '/';
     const dir = mdPath.replace(/[\\/][^\\/]+$/, '');
     const normRel = rel.replace(/[\\/]+/g, sep);
@@ -133,45 +121,43 @@ export function ProcessingArea({
     } as const;
   }
 
+  const toDataUrl = async (src: string): Promise<string | undefined> => {
+    if (!src) return undefined;
+    const isHttp = /^https?:\/\//i.test(src);
+    if (isHttp) {
+      try {
+        const resp = await fetch(src);
+        const blob = await resp.blob();
+        const b64: string = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+        return b64;
+      } catch {
+        return undefined;
+      }
+    }
+    if (window.electronAPI?.readFileAsDataUrl) {
+      try {
+        const isAbs = /^([a-zA-Z]:\\|\\\\|\/)/.test(src);
+        const sep = fileAbsPath.includes('\\') ? '\\' : '/';
+        const dir = fileAbsPath.replace(/[\\/][^\\/]+$/, '');
+        const normRel = src.replace(/[\\/]+/g, sep);
+        const abs = isAbs ? src : (dir + sep + normRel);
+        return window.electronAPI.readFileAsDataUrl(abs) || undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    return undefined;
+  };
+
   async function handleGenerate(entry: ImageEntry) {
     if (!file) return;
     try {
-      const toDataUrl = async (src: string): Promise<string | undefined> => {
-        if (!src) return undefined;
-        const isHttp = /^https?:\/\//i.test(src);
-        if (isHttp) {
-          try {
-            const resp = await fetch(src);
-            const blob = await resp.blob();
-            const b64: string = await new Promise((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onload = () => resolve(String(reader.result));
-              reader.onerror = reject;
-              reader.readAsDataURL(blob);
-            });
-            return b64;
-          } catch {
-            return undefined;
-          }
-        }
-        if (window.electronAPI?.readFileAsDataUrl) {
-          try {
-            // resolve relative to markdown file
-            const isAbs = /^([a-zA-Z]:\\|\\\\|\/)/.test(src);
-            const sep = fileAbsPath.includes('\\') ? '\\' : '/';
-            const dir = fileAbsPath.replace(/[\\/][^\\/]+$/, '');
-            const normRel = src.replace(/[\\/]+/g, sep);
-            const abs = isAbs ? src : (dir + sep + normRel);
-            return window.electronAPI.readFileAsDataUrl(abs) || undefined;
-          } catch {
-            return undefined;
-          }
-        }
-        return undefined;
-      };
-
       const visionSrc = runtimePreset?.vision ? await toDataUrl(entry.originalPath) : undefined;
-
       const payload = {
         document_title: (file.title || file.name || '').toString(),
         above_text: entry.aboveText || '',
@@ -185,23 +171,18 @@ export function ProcessingArea({
         verbose: true,
       } as const;
       const resp = await client.generateCandidates(payload as unknown as Record<string, unknown>);
-      const next = (resp.candidates || []).map((c) => ({
+      const next = (resp.candidates || []).map((c: any) => ({
         name: c.name || '',
         strategy: c.strategy,
         reason: c.reason,
         confidence: typeof c.confidence === 'number' ? c.confidence : undefined,
       }));
       onSetCandidates(entry.id, next);
-      if (resp.normalized_title) {
-        onUpdateIntent(entry.id, resp.normalized_title);
-      }
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(e);
     }
   }
-
-  
 
   if (!file) {
     return (
@@ -216,84 +197,139 @@ export function ProcessingArea({
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="p-3 border-b bg-background space-y-3">\n<Separator />
-        
-        {/* 闁哄鐗嗛幊搴㈡叏椤忓牆绀夐柣鏃囶嚙閸樻挳鏌熺粙娆炬█闁?*/}
+      <div className="p-3 border-b bg-background space-y-3">
+        <Separator />
+
+        <div className="flex items-center gap-2 text-sm">
+          <Label className="text-foreground/80">{text.aiModelPreset}</Label>
+          <Select value={selectedAIPresetId} onValueChange={onSelectAIPreset}>
+            <SelectTrigger className="w-48 h-8">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {presets.ai.map(p => (
+                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Label className="ml-3 text-foreground/80">{text.namingRulesPreset}</Label>
+          <Select value={selectedNamingPresetId} onValueChange={onSelectNamingPreset}>
+            <SelectTrigger className="w-48 h-8">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {presets.naming.map(p => (
+                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Label className="ml-3 text-foreground/80">{text.runtimeOptionsPreset}</Label>
+          <Select value={selectedRuntimePresetId} onValueChange={onSelectRuntimePreset}>
+            <SelectTrigger className="w-48 h-8">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {presets.runtime.map(p => (
+                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <button className="ml-auto inline-flex items-center gap-2 text-foreground/80 hover:text-foreground" onClick={onOpenSettings}>
+            <Settings className="w-4 h-4" />
+            {text.openSettings}
+          </button>
+        </div>
+
         <div className="flex gap-2">
-          <Button size="sm" variant="outline" onClick={onShowFindReplace}>
-            <Search className="w-4 h-4 mr-2" />
+          <button className="px-3 py-1.5 border rounded text-sm" onClick={onShowFindReplace}>
+            <Search className="w-4 h-4 mr-2 inline-block" />
             {text.findReplace}
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => importRef.current?.click()}>
-            <Upload className="w-4 h-4 mr-2" />
+          </button>
+          <button className="px-3 py-1.5 border rounded text-sm" onClick={() => importRef.current?.click()}>
+            <Upload className="w-4 h-4 mr-2 inline-block" />
             {text.importIntent}
-          </Button>
-          <Button size="sm" variant="outline" onClick={async () => {
-            if (!file) return;
-            try {
-              await client.prefetchAttachments({ md_path: file.path, runtime: { attach_dir_name: 'attachments', timeout: 30 }, backup: true });
-            } catch (e) { /* ignore */ }
-          }}>
-            附件预下载
-          </Button>
-          <Button size="sm" variant="outline" onClick={async () => {
-            if (!file) return;
-            try {
-              await client.normalizeHtml({ md_path: file.path, backup: true });
-            } catch (e) { /* ignore */ }
-          }}>
-            规范化HTML图片
-          </Button>
-          <input ref={importRef} type="file" accept="application/json" className="hidden" onChange={async (e) => {
-            const f = e.target.files?.[0];
-            if (!f) return;
-            try {
-              const txt = await f.text();
-              const obj = JSON.parse(txt) as Record<string, string>;
-              const updates = new Map<string, string>();
-              for (const [k,v] of Object.entries(obj)) {
-                updates.set(k, String(v||''));
-              }
-              imageEntries.forEach((entry) => {
-                const byIndex = updates.get(String(entry.index));
-                const byPath = updates.get(entry.originalPath) || Array.from(updates.keys()).find(key => entry.originalPath.endsWith(key));
-                const picked = byIndex || (byPath ? updates.get(byPath) : undefined);
-                if (picked) onUpdateIntent(entry.id, picked);
-              });
-            } catch (err) {
-              // eslint-disable-next-line no-console
-              console.error('import intents failed', err);
-            } finally {
-              e.currentTarget.value = '';
-            }
-          }} />
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={onWriteBack}
-            disabled={isProcessing}
+          </button>
+          <button
+            className="px-3 py-1.5 border rounded text-sm"
+            onClick={async () => {
+              if (!file) return;
+              try {
+                await client.prefetchAttachments({
+                  md_path: file.path,
+                  runtime: {
+                    attach_dir_name: runtimePreset.attachDir,
+                    timeout: runtimePreset.timeout,
+                  },
+                  backup: runtimePreset.backup,
+                } as any);
+                toast.success(language === 'zh' ? '附件预下载完成' : 'Prefetch completed');
+              } catch {}
+            }}
           >
-            <Save className="w-4 h-4 mr-2" />
+            {text.prefetchAttachments ?? (language === 'zh' ? '附件预下载' : 'Prefetch Attachments')}
+          </button>
+          <button
+            className="px-3 py-1.5 border rounded text-sm"
+            onClick={async () => {
+              if (!file) return;
+              try {
+                const r: any = await client.normalizeHtml({ md_path: file.path, backup: true } as any);
+                if (r.updated && r.count > 0) {
+                  toast.success(language === 'zh' ? `规范化完成：${r.count} 处` : `Normalized ${r.count} changes`);
+                } else {
+                  toast.message(language === 'zh' ? '无需规范化' : 'No changes');
+                }
+              } catch {}
+            }}
+          >
+            {text.normalizeHtml ?? (language === 'zh' ? '规范化HTML图片' : 'Normalize HTML <img>')}
+          </button>
+          <input
+            ref={importRef}
+            type="file"
+            accept="application/json"
+            className="hidden"
+            onChange={async (e) => {
+              const f = e.target.files?.[0];
+              if (!f) return;
+              try {
+                const txt = await f.text();
+                const obj = JSON.parse(txt) as Record<string, string>;
+                const updates = new Map<string, string>();
+                for (const [k, v] of Object.entries(obj)) updates.set(k, String(v || ''));
+                imageEntries.forEach((entry) => {
+                  const byIndex = updates.get(String(entry.index));
+                  const byPath = updates.get(entry.originalPath) || Array.from(updates.keys()).find(key => entry.originalPath.endsWith(key));
+                  const picked = byIndex || (byPath ? updates.get(byPath) : undefined);
+                  if (picked) onUpdateIntent(entry.id, picked);
+                });
+              } catch (err) {
+                // eslint-disable-next-line no-console
+                console.error('import intents failed', err);
+              } finally {
+                e.currentTarget.value = '';
+              }
+            }}
+          />
+          <button className="px-3 py-1.5 border rounded text-sm" onClick={onWriteBack} disabled={isProcessing}>
+            <Save className="w-4 h-4 mr-2 inline-block" />
             {text.writeBack}
-          </Button>
+          </button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button size="sm" variant="outline">
-                <Filter className="w-4 h-4 mr-2" />
+              <button className="px-3 py-1.5 border rounded text-sm">
+                <Filter className="w-4 h-4 mr-2 inline-block" />
                 {text.filter}
-                <ChevronDown className="w-4 h-4 ml-2" />
-              </Button>
+                <ChevronDown className="w-4 h-4 ml-2 inline-block" />
+              </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent>
-              <DropdownMenuItem onClick={() => setFilterMode('all')}>
-                {text.all}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setFilterMode('pending')}>
-                {text.pending}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setFilterMode('skipped')}>
-                {text.skipped}
-              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setFilterMode('all')}>{text.all}</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setFilterMode('pending')}>{text.pending}</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setFilterMode('skipped')}>{text.skipped}</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -318,8 +354,12 @@ export function ProcessingArea({
               <TableRow key={entry.id} className={entry.skipped ? 'opacity-50' : ''}>
                 <TableCell>{entry.index}</TableCell>
                 <TableCell>
-                  <div className="w-16 h-16 bg-background rounded flex items-center justify-center">
-                    <span className="text-xs text-foreground/70">IMG</span>
+                  <div className="w-16 h-16 bg-background rounded flex items-center justify-center overflow-hidden">
+                    {thumbs[entry.id] ? (
+                      <img src={thumbs[entry.id]} className="object-contain w-full h-full" />
+                    ) : (
+                      <span className="text-xs text-foreground/70" title={language === 'zh' ? '未找到图片或无法读取' : 'Not found or unreadable'}>IMG</span>
+                    )}
                   </div>
                 </TableCell>
                 <TableCell className="text-sm">
@@ -344,34 +384,16 @@ export function ProcessingArea({
                 </TableCell>
                 <TableCell>
                   {entry.candidates.length > 0 && (
-                    <Badge variant="secondary">
-                      {entry.candidates.length}
-                    </Badge>
+                    <Badge variant="secondary">{entry.candidates.length}</Badge>
                   )}
                 </TableCell>
                 <TableCell className="text-sm">{entry.finalName}</TableCell>
                 <TableCell>
-                  <Checkbox
-                    checked={entry.skipped}
-                    onCheckedChange={() => onToggleSkip(entry.id)}
-                  />
+                  <Checkbox checked={entry.skipped} onCheckedChange={() => onToggleSkip(entry.id)} />
                 </TableCell>
                 <TableCell>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="mr-2"
-                    onClick={() => handleGenerate(entry)}
-                  >
-                    AI
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => onSelectImage(entry.id)}
-                  >
-                    {text.review}
-                  </Button>
+                  <button className="px-2 py-1 border rounded text-xs mr-2" onClick={() => handleGenerate(entry)}>AI</button>
+                  <button className="px-2 py-1 text-xs" onClick={() => onSelectImage(entry.id)}>{text.review}</button>
                 </TableCell>
               </TableRow>
             ))}
@@ -381,8 +403,4 @@ export function ProcessingArea({
     </div>
   );
 }
-
-
-
-
 

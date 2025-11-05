@@ -10,10 +10,7 @@ import { Toaster } from './components/ui/sonner';
 import { usePresets } from './hooks/usePresets';
 import { useBackend } from '../hooks/useBackend';
 import type {
-  BackendApplyResponse,
-  BackendCandidateResponse,
   BackendLogEntry,
-  BackendPreviewResponse,
   BackendPreviewItem,
 } from '../types/backend';
 import type { APIConfig, AIPreset, NamingPreset, RuntimePreset } from './types/presets';
@@ -54,14 +51,6 @@ export interface ImageEntry {
   aiError?: string | null;
   aiRaw?: string | null;
   requestMode?: string | null;
-}
-
-export interface Profile {
-  id: string;
-  name: string;
-  baseUrl: string;
-  apiKey: string;
-  model: string;
 }
 
 export interface LogEntry {
@@ -144,27 +133,21 @@ function buildPreviewPayload(
       verbose: true,
       backup: runtimePreset.backup,
     },
-  };
+  } as const;
 }
 
-function toImageEntry(
-  fileId: string,
-  item: BackendPreviewItem,
-): ImageEntry {
+function toImageEntry(fileId: string, item: BackendPreviewItem): ImageEntry {
   const candidates: CandidateOption[] = Array.isArray(item.candidates)
-    ? item.candidates.map((candidate: CandidateOption) => ({
+    ? item.candidates.map((candidate: any) => ({
         name: candidate?.name ?? '',
         strategy: candidate?.strategy,
         reason: candidate?.reason,
-        confidence:
-          typeof candidate?.confidence === 'number'
-            ? candidate.confidence
-            : undefined,
+        confidence: typeof candidate?.confidence === 'number' ? candidate.confidence : undefined,
       }))
     : [];
 
-  const normalizedIntent = item.normalized_title ?? '';
-  const suggestedName = item.suggested_name ?? normalizedIntent;
+  const normalizedIntent = (item as any).normalized_title ?? '';
+  const suggestedName = (item as any).suggested_name ?? normalizedIntent;
 
   return {
     id: `img-${fileId}-${item.index}`,
@@ -172,18 +155,18 @@ function toImageEntry(
     originalPath: item.src,
     intent: normalizedIntent,
     candidates,
-    bestStrategy: item.best,
+    bestStrategy: (item as any).best,
     finalName: suggestedName ?? normalizedIntent,
     skipped: false,
     status: 'pending',
     thumbnail: undefined,
-    aboveText: item.above_text ?? '',
-    belowText: item.below_text ?? '',
-    betweenText: item.between_text ?? '',
-    explicitRefs: item.explicit_refs ?? [],
-    aiError: item.ai_error ?? null,
-    aiRaw: item.ai_raw ?? null,
-    requestMode: item.request_mode ?? null,
+    aboveText: (item as any).above_text ?? '',
+    belowText: (item as any).below_text ?? '',
+    betweenText: (item as any).between_text ?? '',
+    explicitRefs: (item as any).explicit_refs ?? [],
+    aiError: (item as any).ai_error ?? null,
+    aiRaw: (item as any).ai_raw ?? null,
+    requestMode: (item as any).request_mode ?? null,
   };
 }
 
@@ -220,14 +203,11 @@ export default function App() {
   const [reviewOpen, setReviewOpen] = useState(false);
 
   const { client, backendReachable, lastError } = useBackend();
-  
-  // 棰勮绠＄悊
   const { presets } = usePresets();
   const [selectedAIPresetId, setSelectedAIPresetId] = useState(() => presets.ai[0]?.id || '');
   const [selectedNamingPresetId, setSelectedNamingPresetId] = useState(() => presets.naming[0]?.id || '');
   const [selectedRuntimePresetId, setSelectedRuntimePresetId] = useState(() => presets.runtime[0]?.id || '');
-  
-  // 褰撻璁惧姞杞藉悗锛屾洿鏂伴€変腑鐨処D锛堝鏋滃綋鍓岻D涓嶅瓨鍦級
+
   useEffect(() => {
     if (presets.ai.length > 0 && !presets.ai.find(p => p.id === selectedAIPresetId)) {
       setSelectedAIPresetId(presets.ai[0].id);
@@ -239,14 +219,14 @@ export default function App() {
       setSelectedRuntimePresetId(presets.runtime[0].id);
     }
   }, [presets, selectedAIPresetId, selectedNamingPresetId, selectedRuntimePresetId]);
-  
+
   const activeAIPreset = resolveAIPreset(presets.ai, selectedAIPresetId);
   const activeNamingPreset = resolveNamingPreset(presets.naming, selectedNamingPresetId);
   const activeRuntimePreset = resolveRuntimePreset(presets.runtime, selectedRuntimePresetId);
 
   const selectedFile = files.find(f => f.id === selectedFileId);
   const selectedImage = imageEntries.find(img => img.id === selectedImageId);
-  const currentIndex = selectedImage ? imageEntries.findIndex(e => e.id === selectedImage.id) : -1;
+  const currentIndex = selectedImage ? imageEntries.findIndex(e => e.id === selectedImage!.id) : -1;
   const previousImage = currentIndex > 0 ? imageEntries[currentIndex - 1] : undefined;
   const nextImage = currentIndex >= 0 && currentIndex < imageEntries.length - 1 ? imageEntries[currentIndex + 1] : undefined;
 
@@ -272,15 +252,15 @@ export default function App() {
             info: 'info',
             debug: 'info',
           };
-          const ts = entry.ts ? new Date(entry.ts * 1000) : new Date();
-          const level = levelMap[entry.level] ?? 'info';
+          const ts = (entry as any).ts ? new Date((entry as any).ts * 1000) : new Date();
+          const level = levelMap[(entry as any).level] ?? 'info';
           const prefix = scope ? `[${scope}] ` : '';
           return {
             id: `${Date.now()}-${index}`,
             timestamp: ts,
             level,
-            message: `${prefix}${entry.message}`,
-          };
+            message: `${prefix}${(entry as any).message}`,
+          } as LogEntry;
         }),
       ]);
     },
@@ -315,8 +295,8 @@ export default function App() {
       setFiles(prev => prev.map(item => item.id === file.id ? { ...item, status: 'processing' } : item));
 
       try {
-        const response = await client.previewDocument(payload);
-        const items = (response.items ?? []).map((item: BackendPreviewItem) => toImageEntry(file.id, item));
+        const response: any = await client.previewDocument(payload as any);
+        const items = (response.items ?? []).map((it: BackendPreviewItem) => toImageEntry(file.id, it));
         setImageEntries(items);
         setFiles(prev => prev.map(item => item.id === file.id
           ? { ...item, title: response.title ?? item.title, status: 'completed', imageCount: response.count ?? items.length, processedCount: 0 }
@@ -324,9 +304,19 @@ export default function App() {
         ));
         if (resetSelection && items.length > 0) setSelectedImageId(items[0].id);
         appendBackendLogs(response.logs, file.name);
-        addLog('info', `棰勮瀹屾垚锛?{file.name}锛?{items.length} 寮狅級`);
+        addLog(
+          'info',
+          language === 'zh'
+            ? `预览完成：${file.name}（${items.length} 张）`
+            : `Preview completed: ${file.name} (${items.length} images)`,
+        );
       } catch (error) {
-        addLog('error', `棰勮澶辫触锛?{(error as Error).message}`);
+        addLog(
+          'error',
+          language === 'zh'
+            ? `预览失败：${(error as Error).message}`
+            : `Preview failed: ${(error as Error).message}`,
+        );
         setFiles(prev => prev.map(item => item.id === file.id ? { ...item, status: 'error' } : item));
       } finally {
         setIsProcessing(false);
@@ -335,12 +325,11 @@ export default function App() {
     [appendBackendLogs, backendReachable, client, activeAIPreset, activeNamingPreset, activeRuntimePreset, language, addLog],
   );
 
-  // 鏂囦欢鍒楄〃鐩稿叧澶勭悊
   const handleAddFiles = useCallback((incoming: File[]) => {
     if (!incoming || incoming.length === 0) return;
     const mdFiles = incoming.filter(f => f.name.endsWith('.md') || f.name.endsWith('.markdown'));
     if (mdFiles.length === 0) {
-      addLog('warning', 'No Markdown files detected');
+      addLog('warning', language === 'zh' ? '未检测到 Markdown 文件' : 'No Markdown files detected');
       return;
     }
     const timestamp = Date.now();
@@ -348,7 +337,7 @@ export default function App() {
     const existing = new Set(files.map(it => it.path));
     const deduped = newItems.filter(it => !existing.has(it.path));
     if (deduped.length === 0) {
-      addLog('info', 'Files already in list');
+      addLog('info', language === 'zh' ? '文件已在列表中' : 'Files already in list');
       return;
     }
     setFiles(prev => [...prev, ...deduped]);
@@ -356,7 +345,7 @@ export default function App() {
     setSelectedImageId(null);
     setReviewOpen(false);
     void loadImageEntriesForFile(deduped[0], true);
-  }, [files, addLog, loadImageEntriesForFile]);
+  }, [files, addLog, loadImageEntriesForFile, language]);
 
   const handleRemoveFiles = useCallback((ids: string[]) => {
     if (!ids || ids.length === 0) return;
@@ -385,7 +374,6 @@ export default function App() {
     if (file) void loadImageEntriesForFile(file);
   }, [files, loadImageEntriesForFile]);
 
-  // 鍒楄〃缂栬緫
   const handleUpdateIntent = useCallback((imageId: string, intent: string) => {
     setImageEntries(prev => prev.map(e => e.id === imageId ? { ...e, intent } : e));
   }, []);
@@ -396,22 +384,21 @@ export default function App() {
     setSelectedImageId(imageId);
     setReviewOpen(true);
   }, []);
-
   const handleSetCandidates = useCallback((imageId: string, cands: CandidateOption[]) => {
     setImageEntries(prev => prev.map(e => e.id === imageId ? { ...e, candidates: cands } : e));
   }, []);
 
-  // 椤堕儴涓庢帶鍒舵潯
   const handleBatchPreview = useCallback(() => {
     if (selectedFile) void loadImageEntriesForFile(selectedFile, true);
   }, [selectedFile, loadImageEntriesForFile]);
+
   const handleWriteBack = useCallback(() => {
     if (!selectedFile) {
-      addLog('warning', '璇烽€夋嫨瑕佸啓鍥炵殑 Markdown 鏂囦欢');
+      addLog('warning', language === 'zh' ? '请选择一个 Markdown 文件' : 'Please select a Markdown file');
       return;
     }
     if (imageEntries.length === 0) {
-      addLog('warning', '褰撳墠鏂囦欢娌℃湁鍙啓鍥炵殑鍥剧墖鏉＄洰');
+      addLog('warning', language === 'zh' ? '没有可写回的图片结果' : 'No image entries to apply');
       return;
     }
 
@@ -432,13 +419,13 @@ export default function App() {
           }),
       ),
       skip_indexes: imageEntries.filter((e) => e.skipped).map((e) => e.index),
-    };
+    } as const;
 
     setIsProcessing(true);
-    addLog('info', `寮€濮嬪啓鍥烇細${selectedFile.name}`);
+    addLog('info', language === 'zh' ? `开始写回：${selectedFile.name}` : `Start apply: ${selectedFile.name}`);
     client
-      .applyDocument(payload)
-      .then((resp) => {
+      .applyDocument(payload as any)
+      .then((resp: any) => {
         appendBackendLogs(resp.logs, selectedFile.name);
         const applied = new Set(resp.applied || []);
         setImageEntries((prev) =>
@@ -446,10 +433,10 @@ export default function App() {
             applied.has(e.index) ? { ...e, status: 'completed', skipped: false } : e,
           ),
         );
-        addLog('info', `鍐欏洖瀹屾垚锛?{selectedFile.name}`);
+        addLog('info', language === 'zh' ? `写回完成：${selectedFile.name}` : `Apply completed: ${selectedFile.name}`);
       })
-      .catch((err) => {
-        addLog('error', `鍐欏洖澶辫触锛?{(err as Error).message}`);
+      .catch((err: unknown) => {
+        addLog('error', language === 'zh' ? `写回失败：${(err as Error).message}` : `Apply failed: ${(err as Error).message}`);
       })
       .finally(() => setIsProcessing(false));
   }, [
@@ -463,6 +450,7 @@ export default function App() {
     addLog,
     appendBackendLogs,
   ]);
+
   const handleShowFindReplace = useCallback(() => setShowFindReplace(true), []);
   const handleCloseFindReplace = useCallback(() => setShowFindReplace(false), []);
   const handleLanguageChange = useCallback((lang: 'zh' | 'en') => setLanguage(lang), []);
@@ -473,21 +461,17 @@ export default function App() {
   const handleOpenSettings = useCallback(() => setSettingsPanelOpen(true), []);
   const handleCloseSettings = useCallback(() => setSettingsPanelOpen(false), []);
 
-  // 鍗曞浘澶嶅
-  const handleReviewClose = useCallback(() => setReviewOpen(false), []);
   const handleReviewApply = useCallback((newName: string) => {
     if (!selectedImage) return;
     setImageEntries(prev => prev.map(e => e.id === selectedImage.id ? { ...e, finalName: newName, intent: newName, status: 'completed', skipped: false } : e));
     setReviewOpen(false);
   }, [selectedImage]);
   const handleReviewSkip = useCallback(() => { if (selectedImage) handleToggleSkip(selectedImage.id); }, [handleToggleSkip, selectedImage]);
-  const handleReviewNext = useCallback(() => { if (nextImage) setSelectedImageId(nextImage.id); else setReviewOpen(false); }, [nextImage]);
-  const handleReviewPrevious = useCallback(() => { if (previousImage) setSelectedImageId(previousImage.id); }, [previousImage]);
+  const handleReviewNext = useCallback(() => { if (previousImage) { /* noop here */ } }, [previousImage]);
+  const handleReviewPrevious = useCallback(() => { if (nextImage) { /* noop here */ } }, [nextImage]);
 
-  // 鍚庣鍋ュ悍鏃ュ織
-  useEffect(() => { if (lastError) addLog('warning', `鍚庣杩炴帴澶辫触锛?{lastError}`); }, [lastError, addLog]);
+  useEffect(() => { if (lastError) addLog('warning', `Backend connection error: ${lastError}`); }, [lastError, addLog]);
 
-  // 鍚屾鏂囦欢缁熻
   useEffect(() => {
     if (!selectedFileId) return;
     const processed = imageEntries.filter(e => e.status === 'completed' && !e.skipped).length;
@@ -534,7 +518,7 @@ export default function App() {
             onUpdateIntent={handleUpdateIntent}
             onToggleSkip={handleToggleSkip}
             onSetCandidates={handleSetCandidates}
-            onSelectImage={handleSelectImage}
+            onSelectImage={setSelectedImageId}
             onShowFindReplace={handleShowFindReplace}
             onOpenSettings={handleOpenSettings}
             isProcessing={isProcessing}
@@ -568,8 +552,8 @@ export default function App() {
           onClose={() => setReviewOpen(false)}
           onApply={handleReviewApply}
           onSkip={handleReviewSkip}
-          onNext={handleReviewNext}
-          onPrevious={handleReviewPrevious}
+          onNext={() => { if (nextImage) setSelectedImageId(nextImage.id); else setReviewOpen(false); }}
+          onPrevious={() => { if (previousImage) setSelectedImageId(previousImage.id); }}
           language={language}
           documentTitle={selectedFile?.title || selectedFile?.name || ''}
           aiPreset={activeAIPreset}
@@ -590,3 +574,4 @@ export default function App() {
     </div>
   );
 }
+

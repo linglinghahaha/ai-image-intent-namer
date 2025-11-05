@@ -27,7 +27,9 @@
     "review": "复审",
     "apply": "应用",
     "images": "张图",
-    "total": "总计"
+    "total": "总计",
+    "prefetchAttachments": "附件预下载",
+    "normalizeHtml": "规范化HTML图片"
   },
   "en": {
     "noFile": "Please select or add a file from the left panel",
@@ -57,6 +59,8 @@
     "review": "Review",
     "apply": "Apply",
     "images": "images",
-    "total": "Total"
+    "total": "Total",
+    "prefetchAttachments": "Prefetch Attachments",
+    "normalizeHtml": "Normalize HTML <img>"
   }
 }
